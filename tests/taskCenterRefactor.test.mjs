@@ -22,9 +22,20 @@ assert.equal(COLDCHAIN_MODEL_CONFIGURATION.event_generation.event_definitions.le
 assert.equal(COLDCHAIN_MODEL_CONFIGURATION.fields.length,13);
 
 const main=await readFile(new URL('../src/main.jsx',import.meta.url),'utf8');
+// Semantic augmentation is toggled at runtime: never invoke a Hook in its JSX branch.
+assert.match(main,/const documentSemanticRules=Form\.useWatch\('documentSemanticRules',form\)\|\|\[\];/);
+const scheme=await readFile(new URL('../src/DocumentAugmentationScheme.jsx',import.meta.url),'utf8');
+assert.match(scheme,/selectedRowKeys:semantic/);
+assert.doesNotMatch(main,/selectedRowKeys:Form\.useWatch/);
+// The table writes directly to Form: registration is required for watch updates and submission.
+assert.match(scheme,/'documentSemanticRules','documentSemanticCustomRules'/);
+assert.match(scheme,/name=\{name\} hidden/);
+assert.match(main,/<DocumentAugmentationScheme/);
 const coldchainEditor=await readFile(new URL('../src/ColdChainTemplateCenter.jsx',import.meta.url),'utf8');
 const coldchainApi=await readFile(new URL('../src/coldchainApi.js',import.meta.url),'utf8');
-assert.match(main,/task-two-column-layout/);
+// V5 moves the unchanged evidence to a full-width tab.
+assert.match(main,/<TaskBasisSummary/);
+assert.match(main,/<Drawer title="任务依据"/);
 assert.match(main,/最少时序步数/);
 assert.match(main,/最多时序步数/);
 assert.match(main,/start_time_policy:'per_sample_generated'/);
@@ -38,8 +49,9 @@ assert.match(coldchainEditor,/title="1\. 事件内容生成请求"/);
 assert.match(coldchainEditor,/label:'分配采样条件'/);
 assert.match(coldchainEditor,/label:'阶段一完整请求'/);
 assert.match(coldchainEditor,/title="2\. 事件内容合成"/);
-assert.match(coldchainEditor,/title="3\. 阶段二完整请求"/);
-assert.match(coldchainEditor,/下载完整数据（CSV）/);
+assert.match(coldchainEditor,/title="阶段二完整请求"/);
+assert.match(coldchainEditor,/title="3\. 时序字段合成"/);
+assert.doesNotMatch(coldchainEditor,/下载完整数据（CSV）/);
 assert.match(coldchainEditor,/text\/csv;charset=utf-8/);
 assert.match(coldchainApi,/generatedEventResult=\{status:'ok',event:generatedEvent\}/);
 assert.match(coldchainApi,/request_preview:true/);

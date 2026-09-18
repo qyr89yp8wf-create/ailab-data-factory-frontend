@@ -12,8 +12,10 @@ import {
   DATA_TYPE_OPTIONS, FALLBACK_CATALOG, GENERATOR_OPTIONS, defaultFields,
 } from './catalog';
 import SyntheticTemplatePreview from './SyntheticTemplatePreview';
+import { BusinessTypeSelect } from '../BusinessTypeSelect';
 import './syntheticTemplate.css';
 
+import RuleQualityReport from '../RuleQualityReport';
 const { Title, Text, Paragraph } = Typography;
 
 const STEP_ITEMS = [
@@ -223,7 +225,7 @@ export function SyntheticDocumentTemplateCreatePage({ onBack, onPublished }) {
       schema_version: 'fictional-template-draft/v1',
       name: currentValues.name,
       document_type: currentValues.documentType,
-      business_type: type?.label || currentValues.documentType,
+      business_type: currentValues.businessType || type?.label || currentValues.documentType,
       content_subtype: currentValues.documentType === 'contract' ? currentValues.contentSubtype : null,
       layout_preset_id: currentValues.layoutPresetId,
       theme_id: currentValues.themeId,
@@ -326,11 +328,11 @@ export function SyntheticDocumentTemplateCreatePage({ onBack, onPublished }) {
   };
 
   const fieldColumns = [
-    { title: '字段名称', width: 150, render: (_, row) => <Input value={row.name} maxLength={40} onChange={event => changeField(row.id, { name: event.target.value })}/> },
-    { title: '数据类型', width: 132, render: (_, row) => <Select showSearch optionFilterProp="label" value={row.data_type} options={DATA_TYPE_OPTIONS} onChange={value => changeField(row.id, { data_type: value })}/> },
-    { title: '生成方式', width: 132, render: (_, row) => <Select value={row.generator?.type} options={GENERATOR_OPTIONS} onChange={value => changeField(row.id, { generator: { type: value } })}/> },
-    { title: '示例值', width: 180, render: (_, row) => <Input value={row.sample_text} onChange={event => changeField(row.id, { sample_text: event.target.value })}/> },
-    { title: '生成规则 / Prompt', render: (_, row) => <Input.TextArea autoSize={{ minRows: 1, maxRows: 3 }} value={row.generator?.rule} onChange={event => changeField(row.id, { generator: { rule: event.target.value, prompt: row.generator?.type === 'llm_prompt' ? event.target.value : row.generator?.prompt } })}/> },
+    { title: '字段名称', width: 150, render: (_, row) => <Input placeholder="请输入字段名称" value={row.name} maxLength={40} onChange={event => changeField(row.id, { name: event.target.value })}/> },
+    { title: '数据类型', width: 132, render: (_, row) => <Select placeholder="请选择数据类型" showSearch optionFilterProp="label" value={row.data_type} options={DATA_TYPE_OPTIONS} onChange={value => changeField(row.id, { data_type: value })}/> },
+    { title: '生成方式', width: 132, render: (_, row) => <Select placeholder="请选择生成方式" value={row.generator?.type} options={GENERATOR_OPTIONS} onChange={value => changeField(row.id, { generator: { type: value } })}/> },
+    { title: '示例值', width: 180, render: (_, row) => <Input placeholder="请输入示例值" value={row.sample_text} onChange={event => changeField(row.id, { sample_text: event.target.value })}/> },
+    { title: '生成规则 / Prompt', render: (_, row) => <Input.TextArea placeholder="描述生成规则 / Prompt，说明目标、约束和输出要求" autoSize={{ minRows: 1, maxRows: 3 }} value={row.generator?.rule} onChange={event => changeField(row.id, { generator: { rule: event.target.value, prompt: row.generator?.type === 'llm_prompt' ? event.target.value : row.generator?.prompt } })}/> },
     { title: '必填', width: 66, align: 'center', render: (_, row) => <Switch size="small" checked={row.required} onChange={checked => changeField(row.id, { required: checked, quality_rule: { ...row.quality_rule, required: checked } })}/> },
     { title: '', width: 44, render: (_, row) => <Popconfirm title="删除字段？" description="删除后可通过重新选择文档类型恢复系统默认字段。" onConfirm={() => removeField(row.id)}><Button type="text" danger icon={<DeleteOutlined/>}/></Popconfirm> },
   ];
@@ -347,14 +349,14 @@ export function SyntheticDocumentTemplateCreatePage({ onBack, onPublished }) {
     <Col span={13}>
       <Card size="small" title="基本信息" className="fictional-config-card">
         <Form.Item name="name" label="模板名称" rules={[{ required: true, message: '请输入模板名称' }, { max: 80 }]}><Input placeholder="例如：国内运单虚构训练模板 V1"/></Form.Item>
-        <Form.Item name="businessType" label="业务类型" rules={[{required:true,whitespace:true,message:'请输入业务类型'}]}><Input placeholder="例如：物流运单"/></Form.Item>
-        <Form.Item name="description" label="模板说明" rules={[{max:500}]}><Input.TextArea rows={2} maxLength={500} showCount/></Form.Item>
+        <Form.Item name="businessType" label="业务类型" rules={[{required:true,message:'请选择业务类型'}]}><BusinessTypeSelect modality="document_image"/></Form.Item>
+        <Form.Item name="description" label="模板说明" rules={[{max:500}]}><Input.TextArea placeholder="请输入模板说明" rows={2} maxLength={500} showCount/></Form.Item>
         <div className="fictional-field-label">文档类型</div>
         <div className="fictional-type-grid">{catalog.document_types.map(item => <Card key={item.value} hoverable size="small" onClick={() => changeDocumentType(item.value)} className={`fictional-choice-card ${documentType === item.value ? 'is-selected' : ''}`}><Text strong>{item.label}</Text><Paragraph type="secondary">{item.description}</Paragraph><Tag>{item.canvas?.width}×{item.canvas?.height}</Tag></Card>)}</div>
-        {documentType === 'contract' && <Form.Item name="contentSubtype" label="合同内容类型" rules={[{ required: true }]}><Select options={subtypeOptions} onChange={changeSubtype}/></Form.Item>}
+        {documentType === 'contract' && <Form.Item name="contentSubtype" label="合同内容类型" rules={[{ required: true }]}><Select placeholder="请选择合同内容类型" options={subtypeOptions} onChange={changeSubtype}/></Form.Item>}
         <div className="fictional-field-label">默认版式</div>
         <div>{layoutOptions.map(item => <Card key={item.id} hoverable size="small" onClick={() => { form.setFieldValue('layoutPresetId', item.id); setValues(current => ({ ...current, layoutPresetId: item.id })); markChanged(); }} className={`fictional-choice-card fictional-layout-card ${values.layoutPresetId === item.id ? 'is-selected' : ''}`}><Flex justify="space-between"><div><Text strong>{item.name}</Text><Paragraph type="secondary">{item.description}</Paragraph></div><Tag color="blue">{item.columns} 栏</Tag></Flex></Card>)}</div>
-        <Form.Item name="seed" label="模板随机种子" tooltip="控制系统初始布局细节，使用相同种子可复现" rules={[{ required: true }]}><InputNumber min={1} max={2147483647} precision={0} style={{ width: '100%' }}/></Form.Item>
+        <Form.Item name="seed" label="模板随机种子" tooltip="控制系统初始布局细节，使用相同种子可复现" rules={[{ required: true }]}><InputNumber placeholder="请输入模板随机种子（1～2147483647）" min={1} max={2147483647} precision={0} style={{ width: '100%' }}/></Form.Item>
       </Card>
     </Col>
     <Col span={11}><Card size="small" title="实时预览" className="fictional-preview-card"><SyntheticTemplatePreview config={values} fields={fields} catalog={catalog}/></Card></Col>
@@ -362,13 +364,13 @@ export function SyntheticDocumentTemplateCreatePage({ onBack, onPublished }) {
 
   const themeStep = <Row gutter={18}>
     <Col span={13}>
-      <Card size="small" title="配色主题" className="fictional-config-card"><div className="fictional-theme-grid">{catalog.themes.map(item => <Card key={item.id} hoverable size="small" onClick={() => changeTheme(item)} className={`fictional-choice-card ${values.themeId === item.id ? 'is-selected' : ''}`}><div className="fictional-theme-swatch"><i style={{ background:item.primary_color }}/><i style={{ background:item.accent_color }}/><i style={{ background:item.border_color }}/></div><Text strong>{item.name}</Text></Card>)}</div><Row gutter={12} className="fictional-color-row"><Col span={12}><Form.Item name="primaryColor" label="主色"><Input type="color"/></Form.Item></Col><Col span={12}><Form.Item name="accentColor" label="浅色背景"><Input type="color"/></Form.Item></Col></Row></Card>
-      <Card size="small" title="安全虚构 Logo" className="fictional-config-card"><Alert type="info" showIcon message="仅提供平台自有抽象图形" description="素材不含真实商标、官方徽标或真实机构名称；正式输出会保留 SYNTHETIC 标识。"/><div className="fictional-logo-grid">{catalog.logos.map(item => <LogoOption key={item.id} item={item} selected={values.logoId === item.id} color={values.primaryColor} onClick={() => { form.setFieldValue('logoId', item.id); setValues(current => ({ ...current, logoId: item.id })); markChanged(); }}/>)}</div><Form.Item name="logoPosition" label="Logo 槽位" rules={[{ required: true }]} className="section-title"><Select options={[{value:'top_left',label:'左上角（推荐）'},{value:'top_center',label:'顶部居中'},{value:'top_right',label:'右上角'}]}/></Form.Item></Card>
+      <Card size="small" title="配色主题" className="fictional-config-card"><div className="fictional-theme-grid">{catalog.themes.map(item => <Card key={item.id} hoverable size="small" onClick={() => changeTheme(item)} className={`fictional-choice-card ${values.themeId === item.id ? 'is-selected' : ''}`}><div className="fictional-theme-swatch"><i style={{ background:item.primary_color }}/><i style={{ background:item.accent_color }}/><i style={{ background:item.border_color }}/></div><Text strong>{item.name}</Text></Card>)}</div><Row gutter={12} className="fictional-color-row"><Col span={12}><Form.Item name="primaryColor" label="主色"><Input placeholder="请输入主色" type="color"/></Form.Item></Col><Col span={12}><Form.Item name="accentColor" label="浅色背景"><Input placeholder="请输入浅色背景" type="color"/></Form.Item></Col></Row></Card>
+      <Card size="small" title="安全虚构 Logo" className="fictional-config-card"><Alert type="info" showIcon message="仅提供平台自有抽象图形" description="素材不含真实商标、官方徽标或真实机构名称；正式输出会保留 SYNTHETIC 标识。"/><div className="fictional-logo-grid">{catalog.logos.map(item => <LogoOption key={item.id} item={item} selected={values.logoId === item.id} color={values.primaryColor} onClick={() => { form.setFieldValue('logoId', item.id); setValues(current => ({ ...current, logoId: item.id })); markChanged(); }}/>)}</div><Form.Item name="logoPosition" label="Logo 槽位" rules={[{ required: true }]} className="section-title"><Select placeholder="请选择Logo 槽位" options={[{value:'top_left',label:'左上角（推荐）'},{value:'top_center',label:'顶部居中'},{value:'top_right',label:'右上角'}]}/></Form.Item></Card>
     </Col>
     <Col span={11}><Card size="small" title="实时预览" className="fictional-preview-card"><SyntheticTemplatePreview config={values} fields={fields} catalog={catalog}/></Card></Col>
   </Row>;
 
-  const fieldStep = <Card className="fictional-fields-card" title={<Space><span>业务字段与生成规则</span><Tag color="blue">{fields.length} 个字段</Tag></Space>} extra={<Button icon={<PlusOutlined/>} onClick={addField}>新增字段</Button>}>
+  const fieldStep = <Card className="fictional-fields-card" title={<Space><span>业务字段与生成规则</span><Tag color="blue">{fields.length} 个字段</Tag></Space>} extra={<Button type="primary" icon={<PlusOutlined/>} onClick={addField}>新增字段</Button>}>
     <Alert type="success" showIcon message="字段语义来自真实业务要求，示例值和主体均为虚构数据" description="字典字段保持代码与名称同源；计算字段保留格式和跨字段关系；模型字段必须提示生成虚构内容。用户可直接修改系统初稿。"/>
     <Table className="fictional-field-table" rowKey="id" size="small" pagination={false} dataSource={fields} columns={fieldColumns} scroll={{ x: 1120, y: 470 }}/>
   </Card>;
@@ -387,8 +389,8 @@ export function SyntheticDocumentTemplateCreatePage({ onBack, onPublished }) {
         <Space direction="vertical"><Text>✓ 禁止真实商标、官方标识和真实印章</Text><Text>✓ 企业、人员、地址与编号全部虚构</Text><Text>✓ 条形码/二维码使用 SYNTHETIC 安全载荷</Text><Text>✓ 图片和 manifest 强制标记“合成数据”</Text></Space>
         <Form.Item name="confirmSynthetic" valuePropName="checked" rules={[{ validator:(_, value) => value ? Promise.resolve() : Promise.reject(new Error('请确认合成数据用途')) }]} className="section-title"><Checkbox>我确认模板仅用于模型训练和测试</Checkbox></Form.Item>
       </Card>
-      {trial && <Alert className="fictional-result-alert" type={trial.status === 'REJECT' ? 'error' : trial.status === 'REVIEW' ? 'warning' : 'success'} showIcon message={`试运行质检：${trial.status}`} description={`字段 ${trial.quality?.field_count ?? fields.length} 个；检查 ${trial.quality?.summary?.checks ?? trial.quality?.check_count ?? '-'} 项；低质 ${trial.quality?.summary?.rejected ?? trial.quality?.low_quality_count ?? 0} 项。`}/>} 
-      {published && <Alert className="fictional-result-alert" type="success" showIcon icon={<CheckCircleOutlined/>} message="模板已发布并进入统一模板目录" description={`${published.template_id} / ${published.version}；数据生成任务可按业务类型选择该不可变版本。`}/>} 
+      {trial && <RuleQualityReport templateTrial report={trial.rule_report||{templateId:draftId}}/>}
+      {published && <Alert className="fictional-result-alert" type="success" showIcon icon={<CheckCircleOutlined/>} message="模板已发布并进入统一模板目录" description={`${published.template_id}；数据生成任务可按业务类型选择该不可变版本。`}/>} 
     </Col>
     <Col span={14}><Card size="small" title={trialImageUrl ? '试运行正式结果' : '配置预览'} className="fictional-preview-card is-large"><SyntheticTemplatePreview config={values} fields={fields} catalog={catalog} trialImageUrl={trialImageUrl}/></Card></Col>
   </Row>;
@@ -396,7 +398,7 @@ export function SyntheticDocumentTemplateCreatePage({ onBack, onPublished }) {
   return <div className="template-create-page fictional-template-page">
     <Flex className="page-header" justify="space-between" align="flex-start">
       <Space align="start"><Button type="text" icon={<LeftOutlined/>} aria-label="返回模板中心" onClick={onBack}/><div><Title level={2}>新建文档类图像模板</Title><Paragraph type="secondary">底图生成法：使用平台生成的安全底图、虚构视觉资产和业务字段制作模板</Paragraph></div></Space>
-      <Space>{draftId && <Tag color="blue">{draftId}</Tag>}<Button icon={<SaveOutlined/>} loading={action === 'save'} disabled={!dirty || Boolean(published)} onClick={save}>保存草稿</Button></Space>
+      <Space><Button onClick={onBack}>取消</Button>{draftId && <Tag color="blue">{draftId}</Tag>}<Button icon={<SaveOutlined/>} loading={action === 'save'} disabled={!dirty || Boolean(published)} onClick={save}>保存草稿</Button></Space>
     </Flex>
     {serviceError && <Alert className="fictional-service-alert" type="warning" showIcon message="本地 Mock 数据读取失败" description={`${serviceError}。刷新页面可重新加载内置示例。`}/>} 
     {serviceReady && <Alert className="fictional-service-alert" type="success" showIcon message="纯前端 Mock 模式已就绪" description="版式、字段规则、试运行图片、Ground Truth 与质检结果保存在当前浏览器。"/>}

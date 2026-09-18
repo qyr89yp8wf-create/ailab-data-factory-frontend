@@ -1,0 +1,11 @@
+import assert from 'node:assert/strict';
+import {privacyFieldOptions} from '../src/privacyFields.js';
+const result=privacyFieldOptions([{id:'recipient_name',name:'收件人'}],['{"messages":[{"role":"user","content":"hello"}],"recipient":{"name":"sample"}}']);
+assert.deepEqual(result.map(r=>r.value),['recipient_name','messages[].role','messages[].content','recipient.name']);
+assert.equal(result[0].label,'收件人（recipient_name）');
+assert.deepEqual(privacyFieldOptions([],['not json','{"a":1}\n{"b":2}']).map(r=>r.value),['a','b']);
+assert.equal(privacyFieldOptions([{id:'a'},{field_id:'a'}],['{"a":1}']).length,1);
+assert.deepEqual(privacyFieldOptions([undefined,null],['null','[]','invalid']),[]);
+const nested=JSON.stringify({arguments:JSON.stringify({shipment_id:'SYN001'})});
+assert.ok(privacyFieldOptions([],[nested]).some(r=>r.value==='arguments.shipment_id'));
+console.log('PASS privacy field definitions, JSONL, nested JSON, deduplication and invalid inputs');

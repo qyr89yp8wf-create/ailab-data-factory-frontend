@@ -1,3 +1,4 @@
+import {encodeStore,decodeStore} from './storageCodec.js';
 import { nowDateTime } from './timeUtils';
 
 const PREFIX = 'data-factory-frontend-v3:';
@@ -18,7 +19,7 @@ export function id(prefix = 'MOCK') {
 export function readStore(key, fallback) {
   try {
     const raw = window.localStorage.getItem(`${PREFIX}${key}`);
-    return raw ? JSON.parse(raw) : clone(fallback);
+    return raw ? JSON.parse(decodeStore(raw)) : clone(fallback);
   } catch {
     return clone(fallback);
   }
@@ -26,9 +27,21 @@ export function readStore(key, fallback) {
 
 export function writeStore(key, value) {
   try {
-    window.localStorage.setItem(`${PREFIX}${key}`, JSON.stringify(value));
+    const storage=window.localStorage;
+    const encoded=encodeStore(JSON.stringify(value));
+    try { storage.setItem(`${PREFIX}${key}`, encoded); }
+    catch (error) {
+      if(error.name!=='QuotaExceededError')throw error;
+      // Lossless migration of this prototype's own existing records only.
+      for(let i=0;i<storage.length;i++){
+        const existingKey=storage.key(i);if(!existingKey?.startsWith(PREFIX))continue;
+        const raw=storage.getItem(existingKey);if(raw.startsWith('lz16:'))continue;const packed=encodeStore(raw);
+        if(packed.length<raw.length&&decodeStore(packed)===raw)storage.setItem(existingKey,packed);
+      }
+      storage.setItem(`${PREFIX}${key}`,encoded);
+    }
   } catch (error) {
-    console.warn(`Mock 状态保存失败：${key}`, error);
+    throw new Error(`原型数据保存失败：${error.message}`);
   }
   return clone(value);
 }

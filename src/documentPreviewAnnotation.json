@@ -1,0 +1,244 @@
+{
+  "sample_id": "DOC-001",
+  "template": {
+    "id": "SYN-TPL-DOC",
+    "version": "0.2"
+  },
+  "content_origin": "controlled_synthetic",
+  "content_notice": "合成示例，仅供训练，不具业务效力",
+  "generated_content": {
+    "fields": {
+      "document_no": "SYN-DOC-0001",
+      "company": "合成示例青禾物流有限公司",
+      "contact": "示例联系人甲",
+      "phone": "138****0001",
+      "address": "虚构示例区合成路1号（非真实地址）",
+      "amount": 120
+    },
+    "stamp": {
+      "method": "script_drawn",
+      "texts": [
+        "合成样章",
+        "不具业务效力"
+      ],
+      "description": "由本地绘图脚本直接绘制在成品中，无独立素材文件"
+    }
+  },
+  "render_annotations": {
+    "image": "images/DOC-001.png",
+    "width": 960,
+    "height": 720,
+    "objects": [
+      {
+        "id": "document_no",
+        "type": "text",
+        "field_id": "document_no",
+        "generated_ref": "generated_content.fields.document_no",
+        "text": "SYN-DOC-0001",
+        "bbox": [
+          230,
+          135,
+          920,
+          185
+        ]
+      },
+      {
+        "id": "company",
+        "type": "text",
+        "field_id": "company",
+        "generated_ref": "generated_content.fields.company",
+        "text": "合成示例青禾物流有限公司",
+        "bbox": [
+          230,
+          195,
+          920,
+          245
+        ]
+      },
+      {
+        "id": "contact",
+        "type": "text",
+        "field_id": "contact",
+        "generated_ref": "generated_content.fields.contact",
+        "text": "示例联系人甲",
+        "bbox": [
+          230,
+          255,
+          920,
+          305
+        ]
+      },
+      {
+        "id": "phone",
+        "type": "text",
+        "field_id": "phone",
+        "generated_ref": "generated_content.fields.phone",
+        "text": "138****0001",
+        "bbox": [
+          230,
+          315,
+          920,
+          365
+        ]
+      },
+      {
+        "id": "address",
+        "type": "text",
+        "field_id": "address",
+        "generated_ref": "generated_content.fields.address",
+        "text": "虚构示例区合成路1号（非真实地址）",
+        "bbox": [
+          230,
+          375,
+          920,
+          425
+        ]
+      },
+      {
+        "id": "amount",
+        "type": "text",
+        "field_id": "amount",
+        "generated_ref": "generated_content.fields.amount",
+        "text": "120.00",
+        "bbox": [
+          230,
+          435,
+          920,
+          485
+        ]
+      },
+      {
+        "id": "title",
+        "text": "物流费用训练样例（非业务凭证）",
+        "bbox": [
+          40,
+          95,
+          900,
+          133
+        ],
+        "type": "text"
+      },
+      {
+        "id": "label-1",
+        "text": "单据编号",
+        "bbox": [
+          40,
+          140,
+          228,
+          183
+        ],
+        "type": "text"
+      },
+      {
+        "id": "label-2",
+        "text": "示例企业",
+        "bbox": [
+          40,
+          200,
+          228,
+          243
+        ],
+        "type": "text"
+      },
+      {
+        "id": "label-3",
+        "text": "联系人",
+        "bbox": [
+          40,
+          260,
+          228,
+          303
+        ],
+        "type": "text"
+      },
+      {
+        "id": "label-4",
+        "text": "电话掩码",
+        "bbox": [
+          40,
+          320,
+          228,
+          363
+        ],
+        "type": "text"
+      },
+      {
+        "id": "label-5",
+        "text": "虚构地址",
+        "bbox": [
+          40,
+          380,
+          228,
+          423
+        ],
+        "type": "text"
+      },
+      {
+        "id": "label-6",
+        "text": "金额（元）",
+        "bbox": [
+          40,
+          440,
+          228,
+          483
+        ],
+        "type": "text"
+      },
+      {
+        "id": "watermark-1",
+        "type": "watermark",
+        "text": "合成示例 · 仅供训练 · 不具业务效力",
+        "bbox": [
+          30,
+          20,
+          930,
+          90
+        ],
+        "trainable": false
+      },
+      {
+        "id": "watermark-2",
+        "type": "watermark",
+        "text": "非真实单据 / SYNTHETIC",
+        "bbox": [
+          30,
+          560,
+          640,
+          650
+        ],
+        "trainable": false
+      },
+      {
+        "id": "stamp",
+        "type": "stamp",
+        "bbox": [
+          680,
+          530,
+          900,
+          680
+        ],
+        "generated_ref": "generated_content.stamp",
+        "texts": [
+          {
+            "text": "合成样章",
+            "bbox": [
+              705,
+              575,
+              885,
+              620
+            ]
+          },
+          {
+            "text": "不具业务效力",
+            "bbox": [
+              695,
+              625,
+              895,
+              669
+            ]
+          }
+        ]
+      }
+    ]
+  }
+}

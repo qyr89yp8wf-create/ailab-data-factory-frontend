@@ -1,0 +1,16 @@
+import assert from 'node:assert/strict';
+import {beginUploadCheck,tickUploadCheck,resolveUpload} from '../src/uploadCheckState.js';
+const check=findings=>{let v=beginUploadCheck({version:'V1',samples:10,publicationStatus:'草稿',uploadFixtureFindings:findings});assert.equal(v.publicationStatus,'校验中');for(let i=0;i<5;i++)v=tickUploadCheck(v);return v;};
+assert.equal(check([]).publicationStatus,'已发布');
+const privacy={sampleId:'S1',ruleId:'S02',category:'隐私质检',status:'FAIL'};
+const blocked=check([privacy]);
+assert.equal(blocked.publicationStatus,'待处理');
+assert.equal(resolveUpload(blocked,'mask',{S02:'部分掩码'}).publicationStatus,'已发布');
+assert.equal(resolveUpload(blocked,'delete').samples,9);
+assert.equal(resolveUpload(blocked,'edit').publicationStatus,'草稿');
+const file=check([{...privacy,category:'文件检查'}]);
+assert.equal(file.publicationStatus,'校验失败');
+assert.throws(()=>resolveUpload(file,'delete'));
+const safety=check([{...privacy,category:'安全质检'}]);
+assert.throws(()=>resolveUpload(safety,'mask',{S02:'部分掩码'}));
+console.log('PASS: publication progress, pass, privacy handling, edit, file and safety blocking');

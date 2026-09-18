@@ -225,7 +225,7 @@ export function SyntheticDocumentTemplateFields({ form }) {
     const legacy = item.legacy_layout_only ? ' · legacy' : '';
     return {
       value: item.template_id,
-      label: `${item.name} · ${item.version} · ${source}${seed}${legacy}`,
+      label: `${item.name} · ${source}${seed}${legacy}`,
     };
   });
 
@@ -234,7 +234,7 @@ export function SyntheticDocumentTemplateFields({ form }) {
       type="info"
       showIcon
       message={`选择已发布的${meta.label}模板`}
-      description="系统内置模板、用户制作的虚构模板和历史种子解析模板来自同一目录；任务提交时锁定模板 ID 与版本。"
+      description="系统内置模板、用户制作的虚构模板和历史种子解析模板来自同一目录；任务提交时锁定模板 ID。"
     />
     {error && <Alert className="section-title" type="error" showIcon message="统一模板目录读取失败" description={`${error}。请刷新页面以重新加载内置 Mock 数据。`}/>} 
     <Row gutter={16} className="section-title">
@@ -251,7 +251,7 @@ export function SyntheticDocumentTemplateFields({ form }) {
         </Form.Item>
       </Col>
       <Col span={6}>
-        <Form.Item name="syntheticDocumentTemplateVersion" label="模板版本" rules={[{ required: true }]}>
+        <Form.Item name="syntheticDocumentTemplateVersion" hidden rules={[{ required: true }]}>
           <Input readOnly placeholder="选择模板后自动锁定"/>
         </Form.Item>
       </Col>
@@ -260,10 +260,10 @@ export function SyntheticDocumentTemplateFields({ form }) {
       <Select options={subtypeOptions} placeholder="选择本批次合同内容类型"/>
     </Form.Item>}
     {!loading && !error && !compatible.length && <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description={`统一目录中暂无已发布的${meta.label}模板`}/>} 
-    {selected && <Card size="small" title="模板版本快照" extra={templateSourceTags(selected)}>
+    {selected && <Card size="small" title="模板快照" extra={templateSourceTags(selected)}>
       <Descriptions size="small" column={2} items={[
         { key: 'id', label: '模板 ID', children: <Text copyable>{selected.template_id}</Text> },
-        { key: 'version', label: '不可变版本', children: selected.version },
+        
         { key: 'canvas', label: '模板画布', children: canvasText(selected) },
         { key: 'objects', label: '结构对象', children: selected.execution_engine === CUSTOMS_PROGRAMMATIC_ENGINE ? '原程序化 renderer 内置版式' : `${selected.cell_count || 0} 格 / ${selected.text_count || 0} 文字 / ${selected.asset_count || 0} 图案` },
         { key: 'fields', label: '动态字段', children: selected.execution_engine === CUSTOMS_PROGRAMMATIC_ENGINE ? `${selected.capability_summary?.content_fields || '50+'} 个业务字段 / 每样本约 ${selected.capability_summary?.sample_annotations || 48} 项标注` : `${selected.field_count || 0} 个` },
@@ -315,8 +315,8 @@ function GenericSyntheticDocumentGenerationFields({ form }) {
   return <>
     <Alert type="info" showIcon message="配置本次程序化虚构生成" description="模板负责版式、字段规则和安全图案；此处设置本批次数量、复现种子、成品尺寸和是否绘制模板中的合成章。"/>
     <Row gutter={16} className="section-title">
-      <Col span={8}><Form.Item name="count" label="生成样本数" rules={[{ required: true }]}><InputNumber min={1} max={100} precision={0} addonAfter="张" style={{ width: '100%' }}/></Form.Item></Col>
-      <Col span={8}><Form.Item name="seed" label="随机种子" tooltip="相同模板版本、参数和随机种子会生成可复现的数据。" rules={[{ required: true }]}><InputNumber min={1} max={2147483647} precision={0} style={{ width: '100%' }}/></Form.Item></Col>
+      <Col span={8}><Form.Item name="count" label="生成样本数" rules={[{ required: true }]}><InputNumber placeholder="请输入生成样本数（1～100）" min={1} max={100} precision={0} addonAfter="张" style={{ width: '100%' }}/></Form.Item></Col>
+      <Col span={8}><Form.Item name="seed" label="随机种子" tooltip="相同模板、参数和随机种子会生成可复现的数据。" rules={[{ required: true }]}><InputNumber placeholder="请输入随机种子（1～2147483647）" min={1} max={2147483647} precision={0} style={{ width: '100%' }}/></Form.Item></Col>
       <Col span={8}><Form.Item name="enableStamps" label="模板内合成章" valuePropName="checked"><Switch checkedChildren="绘制" unCheckedChildren="不绘制"/></Form.Item></Col>
     </Row>
     <Card size="small" title="正式成品尺寸">
@@ -327,8 +327,8 @@ function GenericSyntheticDocumentGenerationFields({ form }) {
         ]}/>
       </Form.Item>
       {mode === 'custom' && <Row gutter={16}>
-        <Col span={12}><Form.Item name="outputWidth" label="成品宽度" rules={[{ required: true }, { type: 'number', min: 640, max: 8192 }]}><InputNumber min={640} max={8192} precision={0} addonAfter="px" style={{ width: '100%' }}/></Form.Item></Col>
-        <Col span={12}><Form.Item name="outputHeight" label="成品高度" rules={[{ required: true }, { type: 'number', min: 640, max: 8192 }]}><InputNumber min={640} max={8192} precision={0} addonAfter="px" style={{ width: '100%' }}/></Form.Item></Col>
+        <Col span={12}><Form.Item name="outputWidth" label="成品宽度" rules={[{ required: true }, { type: 'number', min: 640, max: 8192 }]}><InputNumber placeholder="请输入成品宽度（640～8192）" min={640} max={8192} precision={0} addonAfter="px" style={{ width: '100%' }}/></Form.Item></Col>
+        <Col span={12}><Form.Item name="outputHeight" label="成品高度" rules={[{ required: true }, { type: 'number', min: 640, max: 8192 }]}><InputNumber placeholder="请输入成品高度（640～8192）" min={640} max={8192} precision={0} addonAfter="px" style={{ width: '100%' }}/></Form.Item></Col>
       </Row>}
       <Paragraph type="secondary">系统从模板原始坐标直接投影到成品尺寸，并同步缩放图片、文字、bbox 与 polygon，不经过低分辨率中间图。</Paragraph>
     </Card>
@@ -349,7 +349,7 @@ function GenericSyntheticDocumentAugmentationFields() {
       <Descriptions size="small" column={1} items={[
         { key: 'render', label: '图像处理', children: '按所选成品尺寸一次渲染，不先缩小再放大' },
         { key: 'annotation', label: '标注同步', children: '文字、图案、bbox 与 polygon 使用同一缩放矩阵' },
-        { key: 'lineage', label: '数据血缘', children: '每张图片记录模板 ID、版本、随机种子和 sample_index' },
+        { key: 'lineage', label: '数据血缘', children: '每张图片记录模板 ID、随机种子和 sample_index' },
       ]}/>
     </Card>
   </>;
@@ -390,9 +390,9 @@ export function SyntheticDocumentSubmissionSummary({ form }) {
   const values = form.getFieldsValue(true);
   if (values.syntheticDocumentExecutionEngine === CUSTOMS_PROGRAMMATIC_ENGINE) {
     return <>
-      <Alert type="success" showIcon message="点击“提交任务”后启动程序化报关单 Mock" description="统一模板 ID、版本和配置会保存在浏览器任务快照中，并生成可查看的模拟结果。"/>
+      <Alert type="success" showIcon message="点击“提交任务”后启动程序化报关单 Mock" description="统一模板 ID和配置会保存在浏览器任务快照中，并生成可查看的模拟结果。"/>
       <Descriptions bordered size="small" column={2} className="section-title" items={[
-        { key: 'template', label: '系统模板', children: `${values.syntheticDocumentTemplateName || values.syntheticDocumentTemplateId} / ${values.syntheticDocumentTemplateVersion}` },
+        { key: 'template', label: '系统模板', children: `${values.syntheticDocumentTemplateName || values.syntheticDocumentTemplateId}` },
         { key: 'engine', label: '执行引擎', children: values.syntheticDocumentExecutionEngine },
         { key: 'variant', label: '管线版本', children: values.syntheticDocumentPipelineVariant || 'stamped_background_mainline/v1' },
         { key: 'count', label: '生成样本', children: `${values.count || 0} 张` },
@@ -408,9 +408,9 @@ export function SyntheticDocumentSubmissionSummary({ form }) {
     ? `${values.outputWidth || '-'} × ${values.outputHeight || '-'} px`
     : `${values.syntheticDocumentCanvasWidth || '-'} × ${values.syntheticDocumentCanvasHeight || '-'} px（模板）`;
   return <>
-    <Alert type="info" showIcon message="点击“提交任务”后创建虚构文档 Mock 任务" description="模板版本、生成参数、图片、标注、manifest 和质检报告均由浏览器 Mock 状态保存。"/>
+    <Alert type="info" showIcon message="点击“提交任务”后创建虚构文档 Mock 任务" description="模板、生成参数、图片、标注、manifest 和质检报告均由浏览器 Mock 状态保存。"/>
     <Descriptions bordered size="small" column={2} className="section-title" items={[
-      { key: 'template', label: '模板', children: `${values.syntheticDocumentTemplateName || values.syntheticDocumentTemplateId || '-'} / ${values.syntheticDocumentTemplateVersion || '-'}` },
+      { key: 'template', label: '模板', children: `${values.syntheticDocumentTemplateName || values.syntheticDocumentTemplateId || '-'}` },
       { key: 'source', label: '模板来源', children: <Space>{values.syntheticDocumentTemplateOrigin && <Tag color={values.syntheticDocumentTemplateOrigin === 'system' ? 'blue' : 'green'}>{values.syntheticDocumentTemplateOrigin}</Tag>}{values.syntheticDocumentTemplateBuilderMode === 'seed_parse' && <Tag color="purple">seed</Tag>}{values.syntheticDocumentTemplateLegacy && <Tag color="orange">legacy</Tag>}</Space> },
       { key: 'business', label: '业务类型', children: values.businessType || '-' },
       { key: 'subtype', label: '内容类型', children: subtype },
@@ -428,7 +428,7 @@ export async function createSyntheticDocumentBackendJob(form) {
   const values = form.getFieldsValue(true);
   const templateId = values.syntheticDocumentTemplateId;
   const version = values.syntheticDocumentTemplateVersion;
-  if (!templateId || !version) throw new Error('请选择有效的文档模板版本');
+  if (!templateId || !version) throw new Error('请选择有效的文档模板');
   if (values.syntheticDocumentExecutionEngine === CUSTOMS_PROGRAMMATIC_ENGINE) {
     form.setFieldsValue({ customsTemplateId: 'customs_import_standard_v1' });
     return createCustomsBackendJob(form);
@@ -509,7 +509,7 @@ export function SyntheticDocumentTaskDetail({ job: directJob, task }) {
 
     <Divider orientation="left">配置与数据血缘</Divider>
     <Descriptions bordered size="small" column={2} items={[
-      { key: 'template', label: '模板 ID / 版本', children: `${result.template_id || config.template_id || '-'} / ${result.version || config.version || '-'}` },
+      { key: 'template', label: '模板 ID', children: result.template_id || config.template_id || '-' },
       { key: 'type', label: '文档 / 内容类型', children: `${result.document_type || '-'} / ${result.content_subtype || config.content_subtype || '-'}` },
       { key: 'seed', label: '随机种子', children: config.seed ?? '-' },
       { key: 'size', label: '正式成品尺寸', children: output.width && output.height ? `${output.width} × ${output.height} px` : '沿用模板尺寸' },

@@ -130,7 +130,7 @@ export function KeyEditor({ open, record, onCancel, onSave }) {
       <Row gutter={16}>
         <Col span={12}>
           <Form.Item name="provider" label="服务商" rules={[{ required: true }]}>
-            <Select onChange={changeProvider} options={Object.values(PROVIDERS).map(item => ({
+            <Select placeholder="请选择服务商" onChange={changeProvider} options={Object.values(PROVIDERS).map(item => ({
               value: item.key, label: `${item.name} · ${item.subtitle}`,
             }))}/>
           </Form.Item>
@@ -164,14 +164,16 @@ export function KeyEditor({ open, record, onCancel, onSave }) {
       } }] }>
         {(fields, { add, remove }, { errors }) => <>
           <Form.Item label="模型名称" required>
-            {fields.map((field, index) => <Space key={field.key} align="baseline" className="api-model-row">
-              <Form.Item {...field} noStyle rules={[{ required: true, whitespace: true, message: '请输入模型名称' }]}>
-                <Input placeholder={index === 0 ? '例如：qwen-plus' : '输入另一个模型名称'} style={{ width: 480 }}/>
-              </Form.Item>
-              {fields.length > 1 && <Button type="text" danger onClick={() => remove(field.name)}>删除</Button>}
-            </Space>)}
-            <Button type="dashed" onClick={() => add('')} icon={<PlusOutlined/>}>新增模型</Button>
-            <Form.ErrorList errors={errors}/>
+            <div style={{display:'flex',flexDirection:'column',gap:12}}>
+              {fields.map((field, index) => <div key={field.key} style={{display:'flex',alignItems:'flex-start',gap:12}}>
+                <Form.Item {...field} style={{flex:1,minWidth:0,marginBottom:0}} rules={[{ required: true, whitespace: true, message: '请输入模型名称' }]}>
+                  <Input placeholder={index === 0 ? '例如：qwen-plus' : '输入另一个模型名称'}/>
+                </Form.Item>
+                <div style={{width:64,flexShrink:0}}>{fields.length > 1 && <Button type="text" danger onClick={() => remove(field.name)}>删除</Button>}</div>
+              </div>)}
+              <Button style={{alignSelf:'flex-start'}} type="dashed" onClick={() => add('')} icon={<PlusOutlined/>}>新增模型</Button>
+              <Form.ErrorList errors={errors}/>
+            </div>
           </Form.Item>
         </>}
       </Form.List>
@@ -207,7 +209,7 @@ export function ApiKeysManager() {
       setRecords(items => items.map(item => item.id === editing.id ? { ...item, ...next } : item));
       message.success('配置已更新；完整密钥未保存在前端');
     } else {
-      setRecords(items => [{ ...next, id: `KEY-${String(items.length + 1).padStart(4, '0')}`, createdBy: 'feidongni' }, ...items]);
+      setRecords(items => [{ ...next, id: `KEY-${crypto.randomUUID()}`, createdBy: 'feidongni' }, ...items]);
       message.success('配置已添加');
     }
     setEditorOpen(false);

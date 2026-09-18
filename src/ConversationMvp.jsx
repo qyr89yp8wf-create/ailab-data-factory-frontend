@@ -1,3 +1,4 @@
+import {ModelConfigField} from './ModelConfigField';
 import React, { useEffect, useMemo, useState } from 'react';
 import {
   Alert, Badge, Button, Card, Col, Descriptions, Divider, Flex, Form, Input,
@@ -155,7 +156,7 @@ ${values.toolInstructionsMarkdown || ''}
 }
 
 function MarkdownField({ name, label, rows = 6 }) {
-  return <Form.Item name={name} label={label} rules={[{required:true, whitespace:true, message:`请用 Markdown 填写${label}`}]}><Input.TextArea rows={rows} showCount/></Form.Item>;
+  return <Form.Item name={name} label={label} rules={[{required:true, whitespace:true, message:`请用 Markdown 填写${label}`}]}><Input.TextArea placeholder="请输入内容" rows={rows} showCount/></Form.Item>;
 }
 
 export function ConversationPromptGenerationFields({ form }) {
@@ -201,11 +202,11 @@ export function ConversationPromptGenerationFields({ form }) {
     {knowledgeMode === 'task_rule_cards' ? <Card size="small" title={<Space><FileTextOutlined/>标准规则卡 TXT</Space>}>
       <Alert type="info" showIcon message="一个 [规则 ID] 就是一张规则卡" description="系统不会把普通段落自动拆卡，也不会改写用户规则。必填字段为：类型、名称、动作；ID 必须唯一。规则卡只在本任务中使用。"/>
       <Space wrap className="section-title"><Upload accept=".txt,text/plain" maxCount={1} beforeUpload={beforeUpload} showUploadList={false}><Button icon={<CloudUploadOutlined/>}>选择规则卡 TXT</Button></Upload><Tag color={ids.length ? 'green' : 'default'}>{ids.length ? `已加载 ${ids.length} 张` : '未加载'}</Tag><Text type="secondary">{form.getFieldValue('knowledgeFileName')}</Text></Space>
-      <Row gutter={16} className="section-title"><Col span={12}><Form.Item name="knowledgeVersion" label="规则版本"><Input/></Form.Item></Col><Col span={12}><Form.Item name="knowledgeEffectiveDate" label="生效日期"><Input type="date"/></Form.Item></Col></Row>
+      <Row gutter={16} className="section-title"><Col span={12}><Form.Item name="knowledgeVersion" label="规则版本"><Input placeholder="请输入规则版本"/></Form.Item></Col><Col span={12}><Form.Item name="knowledgeEffectiveDate" label="生效日期"><Input placeholder="请输入生效日期" type="date"/></Form.Item></Col></Row>
       <Form.Item name="knowledgeText" hidden><Input.TextArea/></Form.Item><Form.Item name="knowledgeFileName" hidden><Input/></Form.Item>
     </Card> : <Card size="small" title={<Space><DatabaseOutlined/>外部 RAG 连接</Space>}>
       <Alert type="warning" showIcon message="本产品不创建 RAG 库" description="连接器、权限和召回由外部平台提供。本管线只接收已召回且带来源的冻结知识片段，随后生成 Prompt。当前本地 MVP 没有外部连接器时请选择规则卡 TXT。"/>
-      <Row gutter={16} className="section-title"><Col span={8}><Form.Item name="ragConnectorId" label="连接器 ID" rules={[{required:true}]}><Input placeholder="由平台提供"/></Form.Item></Col><Col span={8}><Form.Item name="ragKnowledgeBaseId" label="知识库 ID" rules={[{required:true}]}><Input placeholder="由平台提供"/></Form.Item></Col><Col span={8}><Form.Item name="ragVersion" label="知识版本"><Input/></Form.Item></Col></Row>
+      <Row gutter={16} className="section-title"><Col span={8}><Form.Item name="ragConnectorId" label="连接器 ID" rules={[{required:true}]}><Input placeholder="由平台提供"/></Form.Item></Col><Col span={8}><Form.Item name="ragKnowledgeBaseId" label="知识库 ID" rules={[{required:true}]}><Input placeholder="由平台提供"/></Form.Item></Col><Col span={8}><Form.Item name="ragVersion" label="知识版本"><Input placeholder="请输入知识版本"/></Form.Item></Col></Row>
       <Form.Item name="ragRetrievedContext" hidden><Input.TextArea/></Form.Item>
       <Badge status={form.getFieldValue('ragRetrievedContext') ? 'success' : 'default'} text={form.getFieldValue('ragRetrievedContext') ? '已收到冻结召回片段' : '等待外部平台注入冻结召回片段'}/>
     </Card>}
@@ -226,26 +227,26 @@ export function ConversationSynthesisFields({ form, job, setJob }) {
     <Alert type="info" showIcon message="第二部分：单条 Prompt → 多轮对话 → 自动质检与扩增" description="默认先用本地 Mock 验证数据契约，不产生费用；切换百炼后会先调用 1 次模型生成整批单条 Prompt，再按样本逐条生成对话。"/>
     <Divider orientation="left">合成参数</Divider>
     <Row gutter={16}>
-      <Col span={6}><Form.Item name="count" label="目标样本数" rules={[{required:true}]}><InputNumber min={1} max={200} style={{width:'100%'}}/></Form.Item></Col>
-      <Col span={6}><Form.Item name="turnMin" label="最少消息数"><InputNumber min={2} max={30} style={{width:'100%'}}/></Form.Item></Col>
-      <Col span={6}><Form.Item name="turnMax" label="最多消息数"><InputNumber min={2} max={30} style={{width:'100%'}}/></Form.Item></Col>
-      <Col span={6}><Form.Item name="seed" label="随机种子" tooltip="相同配置、规则版本和随机种子可复现本地 Mock 结果。"><InputNumber min={1} max={2147483647} style={{width:'100%'}}/></Form.Item></Col>
+      <Col span={6}><Form.Item name="count" label="目标样本数" rules={[{required:true}]}><InputNumber placeholder="请输入目标样本数（1～200）" min={1} max={200} style={{width:'100%'}}/></Form.Item></Col>
+      <Col span={6}><Form.Item name="turnMin" label="最少消息数"><InputNumber placeholder="请输入最少消息数（2～30）" min={2} max={30} style={{width:'100%'}}/></Form.Item></Col>
+      <Col span={6}><Form.Item name="turnMax" label="最多消息数"><InputNumber placeholder="请输入最多消息数（2～30）" min={2} max={30} style={{width:'100%'}}/></Form.Item></Col>
+      <Col span={6}><Form.Item name="seed" label="随机种子" tooltip="相同配置、规则版本和随机种子可复现本地 Mock 结果。"><InputNumber placeholder="请输入随机种子（1～2147483647）" min={1} max={2147483647} style={{width:'100%'}}/></Form.Item></Col>
       <Col span={8}><Form.Item name="provider" label="生成 Provider"><Radio.Group optionType="button" buttonStyle="solid" options={[{label:'本地 Mock',value:'mock'},{label:'阿里云百炼',value:'bailian'}]}/></Form.Item></Col>
-      <Col span={8}><Form.Item name="modelAlias" label="模型别名"><Input disabled={provider === 'mock'} addonBefore={provider === 'mock' ? '演示' : '百炼'}/></Form.Item></Col>
-      <Col span={8}><Form.Item name="sftFormat" label="SFT 输出格式"><Select options={[{label:'Messages JSONL',value:'messages_jsonl'},{label:'ShareGPT JSONL',value:'sharegpt_jsonl'}]}/></Form.Item></Col>
-      <Col span={8}><Form.Item name="promptVersion" label="Prompt 版本"><Input/></Form.Item></Col>
-      <Col span={8}><Form.Item name="temperature" label="Temperature"><InputNumber min={0} max={2} step={0.1} disabled={provider === 'mock'} style={{width:'100%'}}/></Form.Item></Col>
-      <Col span={8}><Form.Item name="enableThinking" label="思考模式" valuePropName="checked"><Switch disabled={provider === 'mock'}/></Form.Item></Col>
+      <Col span={24}><ModelConfigField model={<Form.Item name="modelAlias" label="模型别名"><Input placeholder="请输入模型别名" disabled={provider === 'mock'} addonBefore={provider === 'mock' ? '演示' : '百炼'}/></Form.Item>} parameters={<Row gutter={16}><Col span={12}><Form.Item name="temperature" label="Temperature"><InputNumber placeholder="请输入Temperature（0～2）" min={0} max={2} step={0.1} disabled={provider === 'mock'} style={{width:'100%'}}/></Form.Item></Col><Col span={12}><Form.Item name="enableThinking" label="思考模式" valuePropName="checked"><Switch disabled={provider === 'mock'}/></Form.Item></Col></Row>}/></Col>
+      <Col span={8}><Form.Item name="sftFormat" label="SFT 输出格式"><Select placeholder="请选择SFT 输出格式" options={[{label:'Messages JSONL',value:'messages_jsonl'},{label:'ShareGPT JSONL',value:'sharegpt_jsonl'}]}/></Form.Item></Col>
+      <Col span={8}><Form.Item name="promptVersion" label="Prompt 版本"><Input placeholder="描述Prompt 版本，说明目标、约束和输出要求"/></Form.Item></Col>
+      
+      
     </Row>
     <Alert type={provider === 'mock' ? 'success' : 'warning'} showIcon message={provider === 'mock' ? '本次不会产生付费调用' : `预计至少 ${count + 1} 次模型调用（1次批量 Prompt 生成 + ${count} 次对话生成，扩增另计）`} description={provider === 'mock' ? '使用物流示例事实蓝图验证完整链路；修改为其他场景时请选择可生成批量 Prompt 的语言模型。' : '纯前端版本不会发送真实 API 请求，所有返回均为 Mock。'}/>
     <Divider orientation="left">自动质检与扩增</Divider>
     <Row gutter={16}>
-      <Col span={6}><Form.Item name="passThreshold" label="PASS 阈值"><InputNumber min={70} max={100} style={{width:'100%'}}/></Form.Item></Col>
-      <Col span={6}><Form.Item name="reviewThreshold" label="REVIEW 阈值"><InputNumber min={0} max={90} style={{width:'100%'}}/></Form.Item></Col>
-      <Col span={6}><Form.Item name="duplicateThreshold" label="近重复阈值"><InputNumber min={0.5} max={1} step={0.01} style={{width:'100%'}}/></Form.Item></Col>
+      <Col span={6}><Form.Item name="passThreshold" label="PASS 阈值"><InputNumber placeholder="请输入PASS 阈值（70～100）" min={70} max={100} style={{width:'100%'}}/></Form.Item></Col>
+      <Col span={6}><Form.Item name="reviewThreshold" label="REVIEW 阈值"><InputNumber placeholder="请输入REVIEW 阈值（0～90）" min={0} max={90} style={{width:'100%'}}/></Form.Item></Col>
+      <Col span={6}><Form.Item name="duplicateThreshold" label="近重复阈值"><InputNumber placeholder="请输入近重复阈值（0.5～1）" min={0.5} max={1} step={0.01} style={{width:'100%'}}/></Form.Item></Col>
       <Col span={6}><Form.Item name="judgeEnabled" label="表达质量 Judge" valuePropName="checked"><Switch/></Form.Item></Col>
     </Row>
-    <Card size="small" title="质检驱动扩增" extra={<Form.Item name="enableExpansion" valuePropName="checked" noStyle><Switch/></Form.Item>}><Paragraph type="secondary">按 PASS 覆盖缺口创建新的事实和单条 Prompt，再生成新对话并全量复检。原样本不会被修改成“已提升”。</Paragraph><Form.Item name="maxNew" label="最大新增样本数"><InputNumber min={0} max={100} disabled={!expansionEnabled} style={{width:240}}/></Form.Item></Card>
+    <Card size="small" title="质检驱动扩增" extra={<Form.Item name="enableExpansion" valuePropName="checked" noStyle><Switch/></Form.Item>}><Paragraph type="secondary">按 PASS 覆盖缺口创建新的事实和单条 Prompt，再生成新对话并全量复检。原样本不会被修改成“已提升”。</Paragraph><Form.Item name="maxNew" label="最大新增样本数"><InputNumber placeholder="请输入最大新增样本数（0～100）" min={0} max={100} disabled={!expansionEnabled} style={{width:240}}/></Form.Item></Card>
     <Card className="section-title" size="small" title="质量与数据契约说明"><TermGrid items={TERM_ITEMS.slice(5)}/></Card>
     <Divider orientation="left">运行验证</Divider>
     <ConversationRunPanel form={form} job={job} setJob={setJob}/>

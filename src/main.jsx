@@ -1,4 +1,34 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import {alignBuiltinTask,BUILTIN_TASK_FAMILIES,TASK_FAMILIES} from './builtinTaskAlignment';
+import {isRetiredGpsDataset,reconcileDemoTaskLinks,reconcileDemoDatasetLinks} from './demoDatasetAlignment';
+import ExpansionEvidence from './ExpansionEvidence';
+import {refreshBuiltinQuality} from './builtinQualityMigration';
+import {expansionTargets,validateExpansionPlan} from './coveragePlanning';
+import ExpansionTargetTable from './ExpansionTargetTable.jsx';
+import {expansionCount} from './expansionQuality.js';
+import {FormModelConfig,ModelConfigField,ModelConfigGroup} from './ModelConfigField';
+import { autoQualityEnabled, qualityModelNeeds } from './taskPolicies';
+import { expansionModels, defaultExpansionModel, normalizeAugmentationCount } from './taskFormConstraints';
+import React, { useEffect, useMemo, useState, useRef } from 'react';
+import {uploadStatus,published,beginUploadCheck,stopUploadCheck,tickUploadCheck,replaceUploadVersion,UploadTaskDetail,UploadPublicationPanel} from './uploadLifecycle';
+import {detectUploadMetadata} from './uploadMetadata';
+import DatasetPreview from './DatasetPreview';
+import UnifiedQualityEditor from './UnifiedQualityEditor';
+import AugmentationSelection from './AugmentationSelection.jsx';
+import DocumentAugmentationScheme from './DocumentAugmentationScheme.jsx';
+import TextAugmentationScheme from './TextAugmentationScheme.jsx';
+import TaskBasisSummary from './TaskBasisSummary.jsx';
+import {augmentationPool} from './augmentationSelection.js';
+import {buildAugmentationSelection} from './augmentationSampling.js';
+import {taskQualityRules,PRIVACY_SCOPE_NOTICE} from './qualityScope';
+import { buildTaskDraft, upsertTaskDraft } from './taskDraft';
+import { conversationCatalogRules, conversationRuleCategory, LEGACY_CONVERSATION_RULE_MAP } from './conversationQualityCatalog';
+import { buildTaskDetailLog, downloadTaskLog } from './taskDetailLog';
+import { resolveTaskConfiguration } from './taskConfiguration';
+import { qualityReports, preferredQualityReport, versionWithReport, appendQualityReport } from './qualityHistory';
+import { reportForQualityTask } from './taskQualityReport';
+import { prototypeHistoricalQualityReport, prototypeQualityTaskReport, versionReportsForDisplay } from './prototypeHistoricalQuality';
+import { downloadVersionWithReports } from './qualityResultDownload';
+import { customsTemplateSnapshot, documentSnapshot, documentTemplateRules, DocumentTemplateFields } from './DocumentTemplateEvidence';
 import { createRoot } from 'react-dom/client';
 import {
   Alert, App as AntApp, Avatar, Badge, Breadcrumb, Button, Card, Checkbox, Col,
@@ -52,8 +82,19 @@ import { formatDateTime, nowDateTime } from './timeUtils';
 import { TemplateCenter } from './TemplateCenter';
 import { ApiKeysManager } from './ApiKeysManager';
 import { defaultConversationSampler, buildQuotaPlan } from './conversationSampling';
+import { readStore } from './mockStore';
+import { downloadDatasetExample } from './datasetExampleDownloads';
+import { RETRY_POLICY, newExecutionTask, advanceExecution, stopExecution, qualityExecutionMetadata } from './taskExecution';
+import { BadcasePanel, ExecutionSummary, ExecutionLogs, VersionExecutionInfo, ExecutionQualityReport } from './TaskExecutionPanels';
 import './styles.css';
+import './ued.css';
+import {uedTheme} from './uedTheme';
+import DetailPage, {DetailWorkspace} from './DetailPage';
 
+import {templateRulesSnapshot} from './templateQualitySnapshot';
+import LegacyQualityReportPage from './LegacyQualityReportPage';
+import RuleQualityReport from './RuleQualityReport';
+import {reportRuleRows,isDistribution,rateText} from './qualityResults';
 const { Header, Sider, Content } = Layout;
 const { Title, Text, Paragraph } = Typography;
 const CURRENT_USER = 'feidongni';
@@ -61,22 +102,22 @@ const TASK_TYPES = ['数据合成','数据质检','数据增强','定向扩增']
 
 const modalityColor = { 文档图像:'blue', 对话文本:'geekblue', 时序数据:'green' };
 const stageColor = { 数据合成:'cyan', 数据质检:'purple', 数据增强:'orange', 生成:'cyan', 增强:'orange', 隐私处理:'red', 质量评估:'purple', 隐私评估:'volcano', 覆盖评估:'gold', 定向增强:'orange', 定向扩增:'lime', 问题处置:'magenta' };
-const statusMap = { 运行中:'processing', 已完成:'success', 失败:'error', 已终止:'default', 排队中:'warning', 草稿:'default', 可用:'success' };
+const statusMap = { 运行中:'processing', 异常:'error', 已完成:'success', 失败:'error', 已终止:'default', 排队中:'warning', 草稿:'default', 可用:'success' };
 const modalityLabelMap = { 文档图像:'文档类图像', 对话文本:'对话类数据', 时序数据:'时序类数据' };
 const taskTypeColor=value=>({数据合成:'blue',数据质检:'purple',数据增强:'orange',定向扩增:'lime'}[value]||'default');
 const taskPageConfig = {
-  'tasks-document': { modality:'文档图像', label:'文档类图像', icon:<FileImageOutlined/> },
-  'tasks-conversation': { modality:'对话文本', label:'对话类数据', icon:<FileTextOutlined/> },
-  'tasks-timeseries': { modality:'时序数据', label:'时序类数据', icon:<FundOutlined/> },
+  'tasks-document': { modality:'文档图像', label:'文档图像', icon:<FileImageOutlined/> },
+  'tasks-conversation': { modality:'对话文本', label:'对话文本', icon:<FileTextOutlined/> },
+  'tasks-timeseries': { modality:'时序数据', label:'时序数据', icon:<FundOutlined/> },
 };
 
 const initialTasks = [
   { key:'1', id:'TASK-20260812-0048', name:'物流运单批量合成', description:'合成训练所需运单图像', taskType:'数据合成', modality:'文档图像', businessType:'运单', stages:['数据合成'], input:'运单模板', output:'物流运单图像数据集 / V3', currentStage:'数据合成', status:'运行中', progress:68, created:'2026-08-12 09:42:00' },
-  { key:'2', id:'TASK-20260812-0039', name:'报关单覆盖短板扩增', description:'根据已有覆盖检查结果补齐报关单短板', taskType:'定向扩增', modality:'文档图像', businessType:'报关单', stages:['定向扩增'], input:'报关单与合同数据集 / V2', output:'报关单与合同数据集 / V3', currentStage:'定向扩增', status:'已完成', progress:100, created:'2026-08-12 09:10:00' },
+  { key:'2', id:'TASK-20260812-0039', name:'报关单覆盖短板扩增', description:'根据已有覆盖检查结果补齐报关单短板', taskType:'定向扩增', modality:'文档图像', businessType:'报关单', stages:['定向扩增'], input:'报关单数据集 / V2', output:'报关单数据集 / V3', currentStage:'定向扩增', status:'已完成', progress:100, created:'2026-08-12 09:10:00' },
   { key:'3', id:'TASK-20260812-0027', name:'投诉对话数据质检', description:'检查敏感信息和对话质量', taskType:'数据质检', modality:'对话文本', businessType:'异常反馈', stages:['数据质检'], input:'物流客服多轮对话 / 524D25F69157', output:'物流客服多轮对话 / 8A67C201DF33', currentStage:'样本级质检标签写入', status:'运行中', progress:42, created:'2026-08-12 08:56:00' },
   { key:'4', id:'TASK-20260811-0186', name:'冷链温湿度异常序列合成', description:'合成超温和骤冷事件序列', taskType:'数据合成', modality:'时序数据', businessType:'传感器时序', stages:['数据合成'], input:'冷链时序模板', output:'冷链温湿度时序集 / V3', currentStage:'结果写入', status:'已完成', progress:100, created:'2026-08-11 17:32:00' },
-  { key:'5', id:'TASK-20260811-0173', name:'合同图像数据质检', description:'输出OCR可用性和字段一致性报告', taskType:'数据质检', modality:'文档图像', businessType:'合同', stages:['数据质检'], input:'合同图像数据集 / 7042CB169AED', output:'技术失败，未创建正式版本', currentStage:'OCR回检失败', status:'失败', progress:76, created:'2026-08-11 16:48:00' },
-  { key:'6', id:'TASK-20260811-0159', name:'GPS偏航场景定向扩增', description:'根据覆盖短板定向扩增偏航场景', taskType:'定向扩增', modality:'时序数据', businessType:'GPS轨迹', stages:['定向扩增'], input:'车辆GPS轨迹集 / V2', output:'车辆GPS轨迹集 / V3', currentStage:'等待资源', status:'排队中', progress:0, created:'2026-08-11 15:21:00' },
+  { key:'5', id:'TASK-20260811-0173', name:'报关单图像数据质检', description:'输出OCR可用性和字段一致性报告', taskType:'数据质检', modality:'文档图像', businessType:'报关单', stages:['数据质检'], input:'报关单数据集', output:'技术失败，未创建正式版本', currentStage:'OCR回检失败', status:'失败', progress:76, created:'2026-08-11 16:48:00' },
+  { key:'6', id:'TASK-20260811-0159', name:'冷链异常事件定向扩增', description:'根据冷链事件标签分布补充时序样本', taskType:'定向扩增', modality:'时序数据', businessType:'传感器时序', stages:['定向扩增'], input:'冷链温湿度时序集', output:'待生成', currentStage:'等待资源', status:'排队中', progress:0, created:'2026-08-11 15:21:00' },
   { key:'7', id:'TASK-20260811-0141', name:'异常反馈多轮对话合成', description:'合成投诉、延误与破损场景对话', taskType:'数据合成', modality:'对话文本', businessType:'异常反馈', stages:['数据合成'], input:'智能客服对话模板', output:'物流客服多轮对话 / V3', currentStage:'结果写入', status:'已完成', progress:100, created:'2026-08-11 14:06:00' },
 ];
 
@@ -127,7 +168,7 @@ function normalizedTaskType(task) {
 }
 
 function normalizeTaskTimes(items) {
-  return (items || []).map(task=>{const taskType=normalizedTaskType(task);return {...task,taskType,stages:[taskType],created:formatDateTime(task.created || task.created_at),updated:task.updated||task.updated_at?formatDateTime(task.updated||task.updated_at):undefined};});
+  return (items || []).map(task=>{task=alignBuiltinTask(task);const taskType=normalizedTaskType(task);return {...task,taskType,status:task.status==='部分完成'?'已完成':task.status,stages:[taskType],created:formatDateTime(task.created || task.created_at),updated:task.updated||task.updated_at?formatDateTime(task.updated||task.updated_at):undefined};});
 }
 
 const initialDatasets = [
@@ -136,7 +177,7 @@ const initialDatasets = [
     { id:'D1V2', version:'V2', note:'隐私处理后的运单数据', source:'TASK-20260810-0112', sourceName:'运单隐私优化', samples:'180K', quality:94.8, created:'2026-08-10 16:20:00', consumers:['TASK-20260812-0048'] },
     { id:'D1V1', version:'V1', note:'首批运单生成结果', source:'TASK-20260808-0016', sourceName:'华东区运单初始生成', samples:'120K', quality:91.2, created:'2026-08-08 09:30:00', consumers:['TASK-20260810-0112'] }
   ]},
-  { id:2, name:'报关单与合同数据集', modality:'文档图像', businessType:'报关单', status:'可用', desc:'报关字段、表格、金额及贸易术语样本。', defaultVersion:'V3', totalSamples:'286K', reference:true, versions:[
+  { id:2, name:'报关单数据集', modality:'文档图像', businessType:'报关单', status:'可用', desc:'报关字段、表格、金额及贸易术语样本。', defaultVersion:'V3', totalSamples:'286K', reference:true, versions:[
     { id:'D2V3', version:'V3', note:'覆盖短板定向扩增结果', source:'TASK-20260812-0039', sourceName:'报关单覆盖短板优化', samples:'126K', quality:93.8, created:'2026-08-12 12:10:00', consumers:[] },
     { id:'D2V2', version:'V2', note:'统一字段结构后的数据', source:'TASK-20260809-0088', sourceName:'报关单格式优化', samples:'90K', quality:92.8, created:'2026-08-09 14:40:00', consumers:['TASK-20260812-0039'] },
     { id:'D2V1', version:'V1', note:'首批报关单生成结果', source:'TASK-20260807-0012', sourceName:'报关单初始生成', samples:'70K', quality:88.6, created:'2026-08-07 11:05:00', consumers:['TASK-20260809-0088'] }
@@ -206,7 +247,7 @@ function qualityStatusCounts(total, score) {
 }
 
 function buildVersionQualityReport(modality, version) {
-  if (version.qualityReport && modality !== '对话文本') return version.qualityReport;
+  if (version.qualityReport) return version.qualityReport;
   if (version.qualityChecked === false) return null;
   const storedConversationReport = modality === '对话文本' ? (version.qualityReport || {}) : {};
   const dataCount = numericSampleCount(version.samples);
@@ -263,8 +304,15 @@ function buildVersionQualityReport(modality, version) {
   };
 }
 
+function isQualityCheckedVersion(version) {
+  if(!published(version))return false;
+  return qualityReports(version).some(report=>Number(report.checkedSampleCount||report.statusCounts?.PASS||report.statusCounts?.FAIL||report.statusCounts?.REJECT||0)>0);
+
+}
+
 function isFullQualityVersion(version) {
-  return Boolean(version?.qualityReport&&version?.sampleQualityLabels&&(version.qualityReport.executionRange||'full')==='full'&&(version.sampleQualityLabels.coverage||'full')==='full');
+  if(!published(version))return false;
+  return Boolean(!version?.qualityReport?.statusCounts?.ERROR&&!version?.qualityReport?.statusCounts?.UNCHECKED&&version?.qualityReport&&version?.sampleQualityLabels&&(version.qualityReport.executionRange||'full')==='full'&&(version.sampleQualityLabels.coverage||'full')==='full');
 }
 
 function normalizeDownstreamTask(value, datasetName, updatedAt, index) {
@@ -281,7 +329,8 @@ function normalizeDownstreamTask(value, datasetName, updatedAt, index) {
 }
 
 function normalizeDatasets(items) {
-  return (Array.isArray(items) ? items : []).map((dataset, datasetIndex) => {
+  return (Array.isArray(items) ? items : []).filter(dataset=>!isRetiredGpsDataset(dataset)).map((dataset, datasetIndex) => {
+    if (dataset.businessType === '报关单' && dataset.name === '报关单与合同数据集') dataset = { ...dataset, name: '报关单数据集' };
     const rawVersions = Array.isArray(dataset.versions) ? dataset.versions : [];
     const rawDatasetId = String(dataset.id ?? '');
     const datasetDate = dataset.updatedAt || rawVersions[0]?.updatedAt || rawVersions[0]?.created || nowDateTime();
@@ -303,7 +352,7 @@ function normalizeDatasets(items) {
         note: version.note || version.description || '-',
         samples: numericSampleCount(version.samples),
         updatedAt,
-        created: updatedAt,
+        created: formatDateTime(version.created || version.updatedAt),
         source: version.source || 'UPLOAD',
         sourceName: version.sourceName || '用户上传',
         versionKind: version.versionKind || (String(version.source||'').startsWith('UPLOAD-') ? '上传脱敏' : versionIndex===rawVersions.length-1 ? '合成' : '质检标注'),
@@ -317,7 +366,7 @@ function normalizeDatasets(items) {
       normalized.consumers = (version.consumers || []).map((task, index) => normalizeDownstreamTask(task, dataset.name, updatedAt, index));
       normalized.qualityReport = qualityChecked ? buildVersionQualityReport(dataset.modality, normalized) : null;
       normalized.qualityReportId = normalized.qualityReport?.reportId || version.qualityReportId || null;
-      normalized.sampleQualityLabels = qualityChecked ? (version.sampleQualityLabels || {schemaVersion:'sample-quality/v1',coverage:'full',fields:['overall_score','overall_result','rule_results','issue_labels']}) : null;
+      normalized.sampleQualityLabels = qualityChecked ? (version.sampleQualityLabels || {schemaVersion:'sample-quality/v1',coverage:'full',fields:['rule_results','issue_labels']}) : null;
       normalized.fullQualityChecked = isFullQualityVersion(normalized);
       if(normalized.qualityReport)normalized.qualityReport={...normalized.qualityReport,inputVersionId:normalized.sourceVersionId||normalized.version,outputVersionId:normalized.version,templateId:normalized.templateId,templateVersion:normalized.templateVersion,ruleSnapshot:normalized.qualityReport.ruleSnapshot||TEMPLATE_QUALITY_RULES[dataset.modality]||[]};
       return normalized;
@@ -330,7 +379,7 @@ function normalizeDatasets(items) {
       sourceType: dataset.sourceType || '任务生成',
       templateId: dataset.templateId || template?.id,
       templateVersion: dataset.templateVersion || template?.version,
-      totalSamples: numericSampleCount(dataset.totalSamples) || versions.reduce((sum, version) => sum + numericSampleCount(version.samples), 0),
+      totalSamples: versions.some(v=>v.publicationStatus)?versions.filter(published).reduce((sum,v)=>sum+numericSampleCount(v.samples),0):numericSampleCount(dataset.totalSamples) || versions.reduce((sum, version) => sum + numericSampleCount(version.samples), 0),
       defaultVersion: versions[defaultIndex]?.version || versions[0]?.version || '-',
       updatedAt: formatDateTime(dataset.updatedAt || versions[0]?.updatedAt),
       versions,
@@ -345,6 +394,7 @@ const businessTypeMap = {
 };
 
 function StatusTag({ value }) {
+  if(value==='部分完成')value='已完成';
   return <Tag color={value==='可用'||value==='已完成'?'green':value==='失败'?'red':value==='运行中'?'blue':value==='排队中'?'gold':'default'}>{value}</Tag>;
 }
 
@@ -460,7 +510,7 @@ function ColdChainTaskInformation({ task }) {
     ]}/>
     <Divider orientation="left">配置快照</Divider>
     <Descriptions bordered size="small" column={2} items={[
-      {key:'template',label:'模板版本',children:`${values.coldchainTemplateName||params.template_id||'-'} / ${values.coldchainTemplateVersion||params.template_version||'-'}`},
+      {key:'template',label:'关联模板',children:values.coldchainTemplateName||params.template_id||'-'},
       {key:'count',label:'生成票数',children:`${values.count??params.count??'-'} 票`},
       {key:'seed',label:'随机种子',children:values.seed??params.seed??'-'},
       {key:'interval',label:'采样间隔',children:`每 ${values.sampleIntervalMinutes??params.sample_interval_minutes??60} 分钟`},
@@ -510,7 +560,7 @@ function ReferenceExampleForm({ modality, form, datasets }) {
     <Form.Item name="useReference" label="使用参考样例" valuePropName="checked"><Switch checkedChildren="使用" unCheckedChildren="不使用"/></Form.Item>
     {!enabled?<Alert type="info" showIcon message="系统将仅根据业务规则和本次参数生成数据。"/>:<>
       <Form.Item name="referenceMode" label="参考样例来源"><Radio.Group optionType="button" buttonStyle="solid" options={[{label:'选择数据集版本',value:'dataset'},{label:'临时上传',value:'upload'}]}/></Form.Item>
-      {mode==='upload'?<Form.Item name="referenceFiles" label="上传参考样例"><Upload beforeUpload={()=>false} maxCount={10}><Button icon={<CloudUploadOutlined/>}>选择文件</Button></Upload></Form.Item>:<Form.Item name="referenceVersion" label="选择数据集版本"><Select showSearch optionFilterProp="label" options={versionOptions}/></Form.Item>}
+      {mode==='upload'?<Form.Item name="referenceFiles" label="上传参考样例"><Upload beforeUpload={()=>false} maxCount={10}><Button icon={<CloudUploadOutlined/>}>选择文件</Button></Upload></Form.Item>:<Form.Item name="referenceVersion" label="选择数据集版本"><Select placeholder="请选择选择数据集版本" showSearch optionFilterProp="label" options={versionOptions}/></Form.Item>}
       <Divider orientation="left">参考约束</Divider>
       <Alert type="success" showIcon message="系统将自动执行格式预检、隐私扫描和参考约束提取。"/>
       <Row gutter={16}><Col span={12}><Form.Item label="内容参考强度"><Slider marks={{0:'不参考',50:'适度',100:'严格'}} defaultValue={60}/></Form.Item></Col><Col span={12}><Form.Item label="形式参考强度"><Slider marks={{0:'不参考',50:'适度',100:'严格'}} defaultValue={70}/></Form.Item></Col></Row>
@@ -521,26 +571,26 @@ function ReferenceExampleForm({ modality, form, datasets }) {
 function GenerationParameters({ modality, businessType }) {
   if(modality==='文档图像') return <Row gutter={16}>
     <Col span={12}><Form.Item label="文档类型"><Input value={businessType} disabled/></Form.Item></Col>
-    <Col span={12}><Form.Item label="版式变体"><Select defaultValue="标准版式" options={['标准版式','紧凑版式','多页版式'].map(v=>({label:v,value:v}))}/></Form.Item></Col>
+    <Col span={12}><Form.Item label="版式变体"><Select placeholder="请选择版式变体" defaultValue="标准版式" options={['标准版式','紧凑版式','多页版式'].map(v=>({label:v,value:v}))}/></Form.Item></Col>
     <Col span={12}><Form.Item label="字段完整度"><Slider defaultValue={95} marks={{80:'80%',100:'100%'}}/></Form.Item></Col>
-    <Col span={12}><Form.Item label="业务异常比例"><InputNumber min={0} max={100} defaultValue={10} addonAfter="%"/></Form.Item></Col>
+    <Col span={12}><Form.Item label="业务异常比例"><InputNumber placeholder="请输入业务异常比例（0～100）" min={0} max={100} defaultValue={10} addonAfter="%"/></Form.Item></Col>
   </Row>;
   if(modality==='对话文本') return <Row gutter={16}>
     <Col span={12}><Form.Item label="对话场景"><Checkbox.Group defaultValue={['异常反馈']} options={['咨询问答','信息收集','异常反馈']}/></Form.Item></Col>
     <Col span={12}><Form.Item label="角色"><Checkbox.Group defaultValue={['客户','客服']} options={['客户','客服','调度员','司机']}/></Form.Item></Col>
-    <Col span={12}><Form.Item label="轮次范围"><Select defaultValue="6-10轮" options={['3-5轮','6-10轮','11-15轮'].map(v=>({label:v,value:v}))}/></Form.Item></Col>
-    <Col span={12}><Form.Item label="表达风格"><Select defaultValue="自然口语" options={['正式规范','自然口语','简短直接'].map(v=>({label:v,value:v}))}/></Form.Item></Col>
+    <Col span={12}><Form.Item label="轮次范围"><Select placeholder="请选择轮次范围" defaultValue="6-10轮" options={['3-5轮','6-10轮','11-15轮'].map(v=>({label:v,value:v}))}/></Form.Item></Col>
+    <Col span={12}><Form.Item label="表达风格"><Select placeholder="请选择表达风格" defaultValue="自然口语" options={['正式规范','自然口语','简短直接'].map(v=>({label:v,value:v}))}/></Form.Item></Col>
   </Row>;
   if(businessType==='GPS轨迹') return <Row gutter={16}>
-    <Col span={12}><Form.Item label="路线范围"><Select defaultValue="城市配送" options={['城市配送','城际运输','长途干线'].map(v=>({label:v,value:v}))}/></Form.Item></Col>
-    <Col span={12}><Form.Item label="采样频率"><Select defaultValue="每30秒" options={['每10秒','每30秒','每1分钟'].map(v=>({label:v,value:v}))}/></Form.Item></Col>
-    <Col span={12}><Form.Item label="偏航事件比例"><InputNumber min={0} max={100} defaultValue={8} addonAfter="%"/></Form.Item></Col>
+    <Col span={12}><Form.Item label="路线范围"><Select placeholder="请选择路线范围" defaultValue="城市配送" options={['城市配送','城际运输','长途干线'].map(v=>({label:v,value:v}))}/></Form.Item></Col>
+    <Col span={12}><Form.Item label="采样频率"><Select placeholder="请选择采样频率" defaultValue="每30秒" options={['每10秒','每30秒','每1分钟'].map(v=>({label:v,value:v}))}/></Form.Item></Col>
+    <Col span={12}><Form.Item label="偏航事件比例"><InputNumber placeholder="请输入偏航事件比例（0～100）" min={0} max={100} defaultValue={8} addonAfter="%"/></Form.Item></Col>
     <Col span={12}><Form.Item label="停留事件"><Switch defaultChecked/></Form.Item></Col>
   </Row>;
   return <Row gutter={16}>
     <Col span={12}><Form.Item label="传感器类型"><Checkbox.Group defaultValue={['温度','湿度']} options={['温度','湿度','振动']}/></Form.Item></Col>
-    <Col span={12}><Form.Item label="生成方式"><Select defaultValue="独立生成" options={['独立生成','关联已有GPS轨迹'].map(v=>({label:v,value:v}))}/></Form.Item></Col>
-    <Col span={12}><Form.Item label="采样频率"><Select defaultValue="每5分钟" options={['每1分钟','每5分钟','每10分钟'].map(v=>({label:v,value:v}))}/></Form.Item></Col>
+    <Col span={12}><Form.Item label="生成方式"><Select placeholder="请选择生成方式" defaultValue="独立生成" options={['独立生成','关联已有GPS轨迹'].map(v=>({label:v,value:v}))}/></Form.Item></Col>
+    <Col span={12}><Form.Item label="采样频率"><Select placeholder="请选择采样频率" defaultValue="每5分钟" options={['每1分钟','每5分钟','每10分钟'].map(v=>({label:v,value:v}))}/></Form.Item></Col>
     <Col span={12}><Form.Item label="异常事件"><Checkbox.Group defaultValue={['超温']} options={['超温','骤冷','冲击','设备离线']}/></Form.Item></Col>
   </Row>;
 }
@@ -550,7 +600,7 @@ function OutputConfig({ form, datasets, modality }) {
   const options=datasets.filter(d=>d.modality===modality).map(d=>({label:`${d.name}（当前${d.defaultVersion}，共${d.versions.length}个版本）`,value:d.name}));
   return <>
     <Form.Item name="outputMode" label="结果写入方式"><Radio.Group optionType="button" buttonStyle="solid" options={[{label:'创建新数据集',value:'newDataset'},{label:'写入已有数据集的新版本',value:'newVersion'}]}/></Form.Item>
-    {mode==='newDataset'?<Row gutter={16}><Col span={12}><Form.Item name="outputDatasetName" label="数据集名称" rules={[{required:true}]}><Input placeholder="请输入新数据集名称"/></Form.Item></Col><Col span={12}><Form.Item name="versionNote" label="版本描述" rules={[{required:true}]}><Input placeholder="说明本批数据的业务含义"/></Form.Item></Col></Row>:<Row gutter={16}><Col span={12}><Form.Item name="targetDataset" label="目标数据集" rules={[{required:true}]}><Select options={options}/></Form.Item></Col><Col span={12}><Form.Item name="versionNote" label="版本描述" rules={[{required:true}]}><Input placeholder="说明本次输出与业务用途"/></Form.Item></Col></Row>}
+    {mode==='newDataset'?<Row gutter={16}><Col span={12}><Form.Item name="outputDatasetName" label="数据集名称" rules={[{required:true}]}><Input placeholder="请输入新数据集名称"/></Form.Item></Col><Col span={12}><Form.Item name="versionNote" label="版本描述" rules={[{required:true}]}><Input placeholder="说明本批数据的业务含义"/></Form.Item></Col></Row>:<Row gutter={16}><Col span={12}><Form.Item name="targetDataset" label="目标数据集" rules={[{required:true}]}><Select placeholder="请选择目标数据集" options={options}/></Form.Item></Col><Col span={12}><Form.Item name="versionNote" label="版本描述" rules={[{required:true}]}><Input placeholder="说明本次输出与业务用途"/></Form.Item></Col></Row>}
     <Alert type="info" showIcon message="结果会形成独立且不可编辑的数据快照，并记录来源任务、来源版本和模板快照。"/>
   </>;
 }
@@ -569,25 +619,25 @@ function CustomsEvaluationConfiguration({ form, scopes }) {
     {scopes.includes('质量评估')&&<Card size="small" title="质量评估字段" className="section-title" extra={<Tag color="green">PP-OCRv5 本地执行</Tag>}>
       <Checkbox.Group value={CUSTOMS_EVALUATION_FIELDS.quality} options={CUSTOMS_EVALUATION_FIELDS.quality} disabled/>
       <Row gutter={16} className="section-title">
-        <Col span={8}><Form.Item name="evaluationOcrModel" label="OCR模型"><Select options={[{value:'pp-ocrv5-local',label:'PP-OCRv5（本地CPU）'}]}/></Form.Item></Col>
-        <Col span={8}><Form.Item name="evaluationPassThreshold" label="质量通过门槛"><Select options={[{value:70,label:'宽松（70分）'},{value:80,label:'标准（80分）'},{value:90,label:'严格（90分）'}]}/></Form.Item></Col>
-        <Col span={8}><Form.Item name="evaluationSampleRange" label="评估样本范围"><Select options={['全部数据','随机抽样20%','分层抽样'].map(value=>({value,label:value}))}/></Form.Item></Col>
+        <Col span={8}><ModelConfigField><Form.Item name="evaluationOcrModel" label="OCR模型"><Select placeholder="请选择OCR模型" options={[{value:'pp-ocrv5-local',label:'PP-OCRv5（本地CPU）'}]}/></Form.Item></ModelConfigField></Col>
+        <Col span={8}><Form.Item name="evaluationPassThreshold" label="质量通过门槛"><Select placeholder="请选择质量通过门槛" options={[{value:70,label:'宽松（70分）'},{value:80,label:'标准（80分）'},{value:90,label:'严格（90分）'}]}/></Form.Item></Col>
+        <Col span={8}><Form.Item name="evaluationSampleRange" label="评估样本范围"><Select placeholder="请选择评估样本范围" options={['全部数据','随机抽样20%','分层抽样'].map(value=>({value,label:value}))}/></Form.Item></Col>
       </Row>
       <Descriptions bordered size="small" column={4} items={[{key:'cer',label:'CER上限',children:'≤ 0.05'},{key:'exact',label:'字段完全一致率',children:'≥ 90%'},{key:'code',label:'数字代码准确率',children:'≥ 95%'},{key:'polygon',label:'polygon有效率',children:'≥ 99.5%'},{key:'p10',label:'字段高度P10',children:'≥ 16px'},{key:'median',label:'字段高度中位数',children:'≥ 20px'},{key:'grade',label:'图片质量',children:'清晰/可用/低质'},{key:'decision',label:'最终判定',children:'PASS/REVIEW/REJECT'}]}/>
       <Flex justify="space-between" align="center" className="section-title"><div><Text strong>启用 Qwen-VL 第二路复核</Text><div><Text type="secondary">检查遮挡、版式异常和整体可读性，只允许降级本地结论。</Text></div></div><Form.Item name="evaluationQualityVlm" valuePropName="checked" noStyle><Switch/></Form.Item></Flex>
-      {enableQualityVlm&&<Form.Item name="evaluationQualityVlmModel" label="VLM模型"><Select options={[{value:'qwen3-vl-8b-instruct',label:'Qwen3-VL-8B-Instruct'}]}/></Form.Item>}
+      {enableQualityVlm&&<ModelConfigField><Form.Item name="evaluationQualityVlmModel" label="VLM模型"><Select placeholder="请选择VLM模型" options={[{value:'qwen3-vl-8b-instruct',label:'Qwen3-VL-8B-Instruct'}]}/></Form.Item></ModelConfigField>}
     </Card>}
     {scopes.includes('隐私评估')&&<Card size="small" title="隐私评估字段" className="section-title">
       <Form.Item name="evaluationPrivacyFields" label="检查字段"><Checkbox.Group options={CUSTOMS_EVALUATION_FIELDS.privacy}/></Form.Item>
       <Alert type="info" showIcon message="隐私评估只标记低质样本" description="通过结构化字段契约、格式规则、机器码和图案检查判断是否仍含不安全内容；不在原样本上二次处理。"/>
       <Flex justify="space-between" align="center" className="section-title"><div><Text strong>启用 VLM 图像隐私复核</Text><div><Text type="secondary">用于检查印章、码区及文字图像中疑似未替换内容。</Text></div></div><Form.Item name="evaluationPrivacyVlm" valuePropName="checked" noStyle><Switch/></Form.Item></Flex>
-      {enablePrivacyVlm&&<Form.Item name="evaluationPrivacyVlmModel" label="VLM模型"><Select options={[{value:'qwen3-vl-8b-instruct',label:'Qwen3-VL-8B-Instruct'}]}/></Form.Item>}
+      {enablePrivacyVlm&&<ModelConfigField><Form.Item name="evaluationPrivacyVlmModel" label="VLM模型"><Select placeholder="请选择VLM模型" options={[{value:'qwen3-vl-8b-instruct',label:'Qwen3-VL-8B-Instruct'}]}/></Form.Item></ModelConfigField>}
     </Card>}
     {scopes.includes('覆盖评估')&&<Card size="small" title="覆盖评估字段" className="section-title">
       <Form.Item name="evaluationCoverageFields" label="统计维度"><Checkbox.Group options={CUSTOMS_EVALUATION_FIELDS.coverage}/></Form.Item>
       <Alert type="info" showIcon message="优先统计合成时自带标签" description="业务字段、字典取值、增强算子和印章类型直接读取 manifest；无法从结构化标签获得的视觉场景，再由VLM按用户勾选标签补充打标。"/>
       <Flex justify="space-between" align="center" className="section-title"><div><Text strong>启用 VLM 视觉覆盖打标</Text><div><Text type="secondary">识别拍照、阴影、折痕、污渍、遮挡、透视和低可读性等视觉标签。</Text></div></div><Form.Item name="evaluationCoverageVlm" valuePropName="checked" noStyle><Switch/></Form.Item></Flex>
-      {enableCoverageVlm&&<Form.Item name="evaluationCoverageVlmModel" label="VLM模型"><Select options={[{value:'qwen3-vl-8b-instruct',label:'Qwen3-VL-8B-Instruct'}]}/></Form.Item>}
+      {enableCoverageVlm&&<ModelConfigField><Form.Item name="evaluationCoverageVlmModel" label="VLM模型"><Select placeholder="请选择VLM模型" options={[{value:'qwen3-vl-8b-instruct',label:'Qwen3-VL-8B-Instruct'}]}/></Form.Item></ModelConfigField>}
     </Card>}
   </>;
 }
@@ -600,9 +650,9 @@ function DocumentDirectionalExpansion({ form, standalone = false }) {
       {!enabled?<Alert type="info" showIcon message="未启用：任务只输出评估报告，不生成新数据。"/>:<>
         <Alert type="success" showIcon message="已启用：仅针对命中的低质标签和覆盖不足标签补量，新增样本必须重新质检。"/>
         <Row gutter={16} className="section-title">
-          <Col span={8}><Form.Item name="maxEvaluationExpansion" label="扩增上限" rules={[{required:true,message:'请配置扩增上限'}]}><InputNumber min={1} max={100000} addonAfter="张" style={{width:'100%'}}/></Form.Item></Col>
-          <Col span={8}><Form.Item name="evaluationExpansionLlm" label="文字与字段生成模型"><Select options={[{value:'qwen3-14b-no-thinking',label:'Qwen3-14B（非思考模式）'}]}/></Form.Item></Col>
-          <Col span={8}><Form.Item name="evaluationExpansionDiffusion" label="图像生成模型"><Select options={[{value:'qwen-image-edit',label:'Qwen-Image-Edit'},{value:'none',label:'不调用图像生成模型，仅本地增强'}]}/></Form.Item></Col>
+          <Col span={8}><Form.Item name="maxEvaluationExpansion" label="扩增上限" rules={[{required:true,message:'请配置扩增上限'}]}><InputNumber placeholder="请输入扩增上限（1～100000）" min={1} max={100000} addonAfter="张" style={{width:'100%'}}/></Form.Item></Col>
+          <Col span={8}><ModelConfigField><Form.Item name="evaluationExpansionLlm" label="文字与字段生成模型"><Select placeholder="请选择文字与字段生成模型" options={[{value:'qwen3-14b-no-thinking',label:'Qwen3-14B（非思考模式）'}]}/></Form.Item></ModelConfigField></Col>
+          <Col span={8}><ModelConfigField><Form.Item name="evaluationExpansionDiffusion" label="图像生成模型"><Select placeholder="请选择图像生成模型" options={[{value:'qwen-image-edit',label:'Qwen-Image-Edit'},{value:'none',label:'不调用图像生成模型，仅本地增强'}]}/></Form.Item></ModelConfigField></Col>
         </Row>
         <Form.Item name="evaluationExpansionTargets" label="允许扩增的目标类型"><Checkbox.Group options={['低质样本替代','业务字段覆盖补齐','代码表取值覆盖补齐','视觉场景覆盖补齐','隐私失败样本替代']}/></Form.Item>
       </>}
@@ -633,9 +683,9 @@ function LegacyCreateTaskPage({ draft, datasets, onCancel, onSubmit }) {
   const submit=async()=>{if(submitting)return;setSubmitting(true);try{const v=await form.validateFields();const stages=isSyntheticDocumentGenerate?syntheticDocumentStages(v):isCustomsGenerate?customsStages(v):isColdChainGenerate?coldchainStages(v):isConversationGenerate?conversationStages(v):isGenerate?['生成',...(v.enableAugment?['增强']:[]),...(v.enablePrivacy?['隐私处理']:[])]:isDocumentEvaluation?[...v.evaluationScopes,...(v.enableAutoExpansion?['定向扩增']:[])]:[...v.evaluationScopes,...(v.optimization||[])];const output=isDocumentEvaluation?(v.enableAutoExpansion?`${v.inputDatasetName} / 新版本`:'仅评估报告'):!isGenerate&&!optimization.length?'仅评估报告':v.outputMode==='newVersion'?`${v.targetDataset} / 新版本`:v.outputDatasetName;const backendJob=isSyntheticDocumentGenerate?await createSyntheticDocumentBackendJob(form):isCustomsGenerate?await createCustomsBackendJob(form):isColdChainGenerate?await createColdChainBackendJob(form):isConversationGenerate?await createConversationBackendJob(form):null;const input=isSyntheticDocumentGenerate?`${v.syntheticDocumentTemplateId} / ${v.syntheticDocumentTemplateVersion}`:isCustomsGenerate?'报关单模板与结构化配置':isColdChainGenerate?`${v.coldchainTemplateId} / ${v.coldchainTemplateVersion}`:isConversationGenerate?`${v.conversationTemplateId} / ${v.conversationTemplateVersion}`:isGenerate?(v.useReference?`参考：${v.referenceVersion||'临时上传'}`:'系统生成'):v.inputVersion;onSubmit({...draft,...v,businessType,stages,input,output,backendJob});}catch(error){if(!error?.errorFields)message.error(error.message||'任务提交失败');else message.warning('请完成必填配置');}finally{setSubmitting(false);}};
   const allowedOptimizations=[...(evaluationScopes.includes('质量评估')?['问题处置']:[]),...(evaluationScopes.includes('隐私评估')?['隐私处理']:[]),...(evaluationScopes.includes('覆盖评估')?['定向增强','定向扩增']:[])];
   return <div className="create-task-page">
-    <Flex justify="space-between" align="center" className="create-page-heading"><Space><Button type="text" shape="circle" icon={<LeftOutlined/>} aria-label={`返回${modalityLabel}任务列表`} onClick={onCancel}/><Title level={3}>新建{modalityLabel}{draft.taskType}任务</Title></Space><Space><Button disabled={submitting} onClick={()=>message.success('草稿已保存')}>保存草稿</Button>{step>0&&<Button disabled={submitting} onClick={()=>setStep(s=>s-1)}>上一步</Button>}{step<stepTitles.length-1?<Button type="primary" onClick={next}>下一步</Button>:<Button type="primary" loading={submitting} onClick={submit}>提交任务</Button>}</Space></Flex>
+    <Flex justify="space-between" align="center" className="create-page-heading"><Space><Button type="text" shape="circle" icon={<LeftOutlined/>} aria-label={`返回${modalityLabel}任务列表`} onClick={onCancel}/><Title level={3}>新建{modalityLabel}{draft.taskType}任务</Title></Space><Space><Button disabled={submitting} onClick={onCancel}>取消</Button><Button disabled={submitting} onClick={()=>message.success('草稿已保存')}>保存草稿</Button>{step>0&&<Button disabled={submitting} onClick={()=>setStep(s=>s-1)}>上一步</Button>}{step<stepTitles.length-1?<Button type="primary" onClick={next}>下一步</Button>:<Button type="primary" loading={submitting} onClick={submit}>提交任务</Button>}</Space></Flex>
     <Form form={form} layout="vertical" initialValues={{...(draft.modality==='文档图像'?SYNTHETIC_DOCUMENT_INITIAL_VALUES:draft.modality==='时序数据'?COLD_CHAIN_INITIAL_VALUES:draft.modality==='对话文本'?CONVERSATION_TASK_INITIAL_VALUES:{}),count:draft.modality==='对话文本'?20:draft.modality==='文档图像'?10:draft.modality==='时序数据'?10:10000,useReference:false,referenceMode:'dataset',outputMode:'newDataset',outputDatasetName:draft.modality==='对话文本'?'智能客服多轮对话':draft.modality==='时序数据'?'冷藏集装箱国际运输时序数据集':'',versionNote:draft.modality==='对话文本'?'模板驱动的合成、增强、质检与定向扩增结果':draft.modality==='时序数据'?'冷链时序模板驱动的生成、增强、质检与定向扩增结果':draft.modality==='文档图像'?'质检驱动的文档图像定向扩增结果':'',evaluationScopes:['质量评估'],optimization:[],sampleRange:'全部数据',inputVersionStrategy:'锁定所选版本',evaluationOcrModel:'pp-ocrv5-local',evaluationPassThreshold:80,evaluationSampleRange:'全部数据',evaluationQualityVlm:false,evaluationPrivacyVlm:false,evaluationCoverageVlm:true,evaluationQualityVlmModel:'qwen3-vl-8b-instruct',evaluationPrivacyVlmModel:'qwen3-vl-8b-instruct',evaluationCoverageVlmModel:'qwen3-vl-8b-instruct',evaluationPrivacyFields:CUSTOMS_EVALUATION_FIELDS.privacy,evaluationCoverageFields:CUSTOMS_EVALUATION_FIELDS.coverage,enableAutoExpansion:false,maxEvaluationExpansion:5000,evaluationExpansionLlm:'qwen3-14b-no-thinking',evaluationExpansionDiffusion:'qwen-image-edit',evaluationExpansionTargets:['低质样本替代','业务字段覆盖补齐','代码表取值覆盖补齐','视觉场景覆盖补齐','隐私失败样本替代'],...(draft.configSnapshot||{}),name:draft.name,description:draft.description,businessType:draft.businessType||draft.configSnapshot?.businessType||businessTypeMap[draft.modality][0]}}>
-      <Card className="task-fixed-header"><Row gutter={20} align="bottom"><Col span={12}><Form.Item name="name" label="任务名称" rules={[{required:true}]}><Input maxLength={50}/></Form.Item></Col><Col span={12}><Form.Item name="description" label="任务描述"><Input maxLength={200} placeholder="可随时修改"/></Form.Item></Col></Row></Card>
+      <Card className="task-fixed-header"><Row gutter={20} align="bottom"><Col span={12}><Form.Item name="name" label="任务名称" rules={[{required:true}]}><Input placeholder="请输入任务名称" maxLength={50}/></Form.Item></Col><Col span={12}><Form.Item name="description" label="任务描述"><Input maxLength={200} placeholder="可随时修改"/></Form.Item></Col></Row></Card>
       <Card className="task-step-card"><Steps current={step} items={stepTitles.map(title=>({title}))}/><Divider/><div className="task-step-content">
         {current==='模板选择'&&(isConversationGenerate?<ConversationTemplateSelectionFields form={form}/>:isColdChainGenerate?<><Form.Item name="businessType" label="业务子类型" rules={[{required:true}]}><Segmented options={businessTypeMap[draft.modality]} onChange={value=>{setSelectedBusinessType(value);if(value==='传感器时序')form.setFieldsValue(COLD_CHAIN_INITIAL_VALUES);}}/></Form.Item><ColdChainTemplateSelectionFields form={form}/></>:isSyntheticDocumentGenerate?<><Form.Item name="businessType" label="业务子类型" rules={[{required:true}]}><Segmented options={businessTypeMap[draft.modality]} onChange={value=>{setSelectedBusinessType(value);form.setFieldsValue({...SYNTHETIC_DOCUMENT_INITIAL_VALUES,businessType:value});}}/></Form.Item><SyntheticDocumentTemplateFields form={form}/></>:<><Form.Item name="businessType" label="业务子类型" rules={[{required:true}]}><Segmented options={businessTypeMap[draft.modality]} onChange={value=>{setSelectedBusinessType(value);if(value==='报关单')form.setFieldsValue(CUSTOMS_INITIAL_VALUES);}}/></Form.Item><CustomsTemplateFields form={form}/></>)}
         {current==='数据合成配置'&&(isSyntheticDocumentGenerate?<SyntheticDocumentGenerationFields form={form}/>:<CustomsGenerationFields form={form}/>)}
@@ -643,16 +693,16 @@ function LegacyCreateTaskPage({ draft, datasets, onCancel, onSubmit }) {
         {current==='数据增强配置'&&(isColdChainGenerate?<ColdChainAugmentationFields form={form}/>:isConversationGenerate?<ConversationAugmentationFields form={form}/>:isSyntheticDocumentGenerate?<SyntheticDocumentAugmentationFields form={form}/>:<CustomsAugmentationFields form={form}/>)}
         {current==='质检与扩增配置'&&(isSyntheticDocumentGenerate?<SyntheticDocumentQualityFields form={form}/>:<CustomsQualityFields form={form}/>)}
         {current==='质检与扩增'&&(isConversationGenerate?<ConversationQualityExpansionFields form={form}/>:<ColdChainQualityFields form={form}/>)}
-        {current==='业务与生成配置'&&<><Form.Item name="businessType" label="业务子类型" rules={[{required:true}]}><Segmented options={businessTypeMap[draft.modality]} onChange={value=>{setSelectedBusinessType(value);if(draft.modality==='文档图像'&&value==='报关单'){form.setFieldsValue(CUSTOMS_INITIAL_VALUES);setStep(0);}if(draft.modality==='时序数据'&&value==='传感器时序'){form.setFieldsValue(COLD_CHAIN_INITIAL_VALUES);setStep(0);}}}/></Form.Item>{draft.modality==='对话文本'&&<Alert type="info" showIcon message="咨询问答、信息收集和异常反馈在同一业务子类型下通过场景参数配置。"/>}<Divider orientation="left">生成参数</Divider><GenerationParameters modality={draft.modality} businessType={businessType}/><Form.Item name="count" label="目标样本数" rules={[{required:true}]}><InputNumber min={10} max={1000000} style={{width:240}}/></Form.Item></>}
+        {current==='业务与生成配置'&&<><Form.Item name="businessType" label="业务子类型" rules={[{required:true}]}><Segmented options={businessTypeMap[draft.modality]} onChange={value=>{setSelectedBusinessType(value);if(draft.modality==='文档图像'&&value==='报关单'){form.setFieldsValue(CUSTOMS_INITIAL_VALUES);setStep(0);}if(draft.modality==='时序数据'&&value==='传感器时序'){form.setFieldsValue(COLD_CHAIN_INITIAL_VALUES);setStep(0);}}}/></Form.Item>{draft.modality==='对话文本'&&<Alert type="info" showIcon message="咨询问答、信息收集和异常反馈在同一业务子类型下通过场景参数配置。"/>}<Divider orientation="left">生成参数</Divider><GenerationParameters modality={draft.modality} businessType={businessType}/><Form.Item name="count" label="目标样本数" rules={[{required:true}]}><InputNumber placeholder="请输入目标样本数（10～1000000）" min={10} max={1000000} style={{width:240}}/></Form.Item></>}
         {current==='参考样例'&&<ReferenceExampleForm modality={draft.modality} form={form} datasets={datasets}/>} 
-        {current==='可选处理'&&<><Row gutter={20}><Col span={12}><Card size="small" title="数据增强" extra={<Form.Item name="enableAugment" valuePropName="checked" noStyle><Switch/></Form.Item>}><Paragraph type="secondary">为生成结果增加真实噪声、表达变化或设备异常。</Paragraph><Form.Item label="增强强度"><Select defaultValue="中等" options={['轻度','中等','重度'].map(v=>({label:v,value:v}))}/></Form.Item></Card></Col><Col span={12}><Card size="small" title="隐私处理" extra={<Form.Item name="enablePrivacy" valuePropName="checked" noStyle><Switch/></Form.Item>}><Paragraph type="secondary">基础隐私检查默认执行；开启后自动处理命中内容。</Paragraph><Form.Item label="处理方式"><Select defaultValue="虚构替换" options={['掩码','泛化','虚构替换'].map(v=>({label:v,value:v}))}/></Form.Item></Card></Col></Row><Alert className="section-title" type="info" showIcon message="格式校验、基础隐私检查和结果安全门槛是系统默认节点。"/></>}
+        {current==='可选处理'&&<><Row gutter={20}><Col span={12}><Card size="small" title="数据增强" extra={<Form.Item name="enableAugment" valuePropName="checked" noStyle><Switch/></Form.Item>}><Paragraph type="secondary">为生成结果增加真实噪声、表达变化或设备异常。</Paragraph><Form.Item label="增强强度"><Select placeholder="请选择增强强度" defaultValue="中等" options={['轻度','中等','重度'].map(v=>({label:v,value:v}))}/></Form.Item></Card></Col><Col span={12}><Card size="small" title="隐私处理" extra={<Form.Item name="enablePrivacy" valuePropName="checked" noStyle><Switch/></Form.Item>}><Paragraph type="secondary">基础隐私检查默认执行；开启后自动处理命中内容。</Paragraph><Form.Item label="处理方式"><Select placeholder="请选择处理方式" defaultValue="虚构替换" options={['掩码','泛化','虚构替换'].map(v=>({label:v,value:v}))}/></Form.Item></Card></Col></Row><Alert className="section-title" type="info" showIcon message="格式校验、基础隐私检查和结果安全门槛是系统默认节点。"/></>}
         {current==='小样预览'&&<><Alert type="success" showIcon message="小样已完成：5条生成成功，基础安全检查通过。"/><Row gutter={12} className="preview-metrics">{[['小样数量','5'],['真实性','91.6'],['逻辑一致性','96.2'],['模型可用性','94.8']].map(([a,b])=><Col span={6} key={a}><Card size="small"><Statistic title={a} value={b}/></Card></Col>)}</Row><Divider orientation="left">本次执行流程</Divider><Steps direction="vertical" size="small" current={-1} items={['生成',...(form.getFieldValue('enableAugment')?['增强']:[]),...(form.getFieldValue('enablePrivacy')?['隐私处理']:[]),'基础安全检查'].map(title=>({title}))}/></>}
         {current==='结果写入'&&isGenerate&&(isSyntheticDocumentGenerate?<><SyntheticDocumentSubmissionSummary form={form}/><Divider orientation="left">写入数据中心</Divider><OutputConfig form={form} datasets={datasets} modality={draft.modality}/></>:isCustomsGenerate?<><CustomsSubmissionSummary form={form}/><Divider orientation="left">写入数据中心</Divider><OutputConfig form={form} datasets={datasets} modality={draft.modality}/></>:isColdChainGenerate?<><ColdChainSubmissionSummary form={form}/><Divider orientation="left">写入数据中心</Divider><OutputConfig form={form} datasets={datasets} modality={draft.modality}/></>:isConversationGenerate?<><ConversationSubmissionSummary form={form}/><Divider orientation="left">写入数据中心</Divider><OutputConfig form={form} datasets={datasets} modality={draft.modality}/></>:<OutputConfig form={form} datasets={datasets} modality={draft.modality}/>)} 
-        {current==='选择输入版本'&&<><Alert type="info" showIcon message="评估与优化针对一个确定、不可编辑的数据集版本执行。"/><Form.Item name="inputVersion" label="输入数据集版本" rules={[{required:true}]}><Select showSearch optionFilterProp="label" options={versionOptions}/></Form.Item>{isDocumentEvaluation&&selectedInputDataset&&<Alert className="section-title" type="success" showIcon message={`系统识别业务类型：${selectedInputDataset.businessType}`} description={`${selectedInputDataset.name} · ${inputVersion}；后续评估字段将按${selectedInputDataset.businessType}模板和数据契约加载。`}/>}<Form.Item name="inputVersionStrategy" label="版本策略"><Radio.Group options={['锁定所选版本']}/></Form.Item></>}
-        {current==='评估配置'&&<><Form.Item name="evaluationScopes" label="评估范围" rules={[{required:true,message:'至少选择一项'}]}><Checkbox.Group options={['质量评估','隐私评估','覆盖评估']}/></Form.Item>{isDocumentEvaluation?(businessType==='报关单'?<CustomsEvaluationConfiguration form={form} scopes={evaluationScopes}/>:<Alert className="section-title" type="info" showIcon message={`已识别为${businessType}`} description="本轮先实现报关单的详细评估字段；运单和合同将复用相同框架并加载各自模板字段。"/>):<><Alert type="info" showIcon message="覆盖评估同时分析业务场景覆盖和增强维度多样性。"/><Row gutter={16} className="section-title"><Col span={12}><Form.Item label="评估样本范围"><Select defaultValue="全部数据" options={['全部数据','随机抽样20%','分层抽样'].map(v=>({label:v,value:v}))}/></Form.Item></Col><Col span={12}><Form.Item label="质量通过门槛"><Select defaultValue="标准（80分）" options={['宽松（70分）','标准（80分）','严格（90分）'].map(v=>({label:v,value:v}))}/></Form.Item></Col></Row></>}</>}
+        {current==='选择输入版本'&&<><Alert type="info" showIcon message="评估与优化针对一个确定、不可编辑的数据集版本执行。"/><Form.Item name="inputVersion" label="输入数据集版本" rules={[{required:true}]}><Select placeholder="请选择输入数据集版本" showSearch optionFilterProp="label" options={versionOptions}/></Form.Item>{isDocumentEvaluation&&selectedInputDataset&&<Alert className="section-title" type="success" showIcon message={`系统识别业务类型：${selectedInputDataset.businessType}`} description={`${selectedInputDataset.name} · ${inputVersion}；后续评估字段将按${selectedInputDataset.businessType}模板和数据契约加载。`}/>}<Form.Item name="inputVersionStrategy" label="版本策略"><Radio.Group options={['锁定所选版本']}/></Form.Item></>}
+        {current==='评估配置'&&<><Form.Item name="evaluationScopes" label="评估范围" rules={[{required:true,message:'至少选择一项'}]}><Checkbox.Group options={['质量评估','隐私评估','覆盖评估']}/></Form.Item>{isDocumentEvaluation?(businessType==='报关单'?<CustomsEvaluationConfiguration form={form} scopes={evaluationScopes}/>:<Alert className="section-title" type="info" showIcon message={`已识别为${businessType}`} description="本轮先实现报关单的详细评估字段；运单和合同将复用相同框架并加载各自模板字段。"/>):<><Alert type="info" showIcon message="覆盖评估同时分析业务场景覆盖和增强维度多样性。"/><Row gutter={16} className="section-title"><Col span={12}><Form.Item label="评估样本范围"><Select placeholder="请选择评估样本范围" defaultValue="全部数据" options={['全部数据','随机抽样20%','分层抽样'].map(v=>({label:v,value:v}))}/></Form.Item></Col><Col span={12}><Form.Item label="质量通过门槛"><Select placeholder="请选择质量通过门槛" defaultValue="标准（80分）" options={['宽松（70分）','标准（80分）','严格（90分）'].map(v=>({label:v,value:v}))}/></Form.Item></Col></Row></>}</>}
         {current==='自动定向扩增'&&<DocumentDirectionalExpansion form={form}/>} 
         {current==='结果写入'&&isDocumentEvaluation&&<>{enableAutoExpansion?<Alert type="success" showIcon message="自动扩增结果将写入输入数据集的新版本" description={`${selectedInputDataset?.name||'输入数据集'}将生成一个新的不可编辑版本；原版本保持不变，评估报告同时关联新旧版本。`}/>:<Alert type="info" showIcon message="本任务只生成评估报告" description="未启用自动定向扩增，不创建数据集新版本。"/>}<Divider orientation="left">执行摘要</Divider><Descriptions bordered size="small" column={2} items={[{key:'input',label:'输入版本',children:inputVersion||'-'},{key:'business',label:'业务类型',children:<Tag color="blue">{businessType}</Tag>},{key:'scope',label:'评估范围',children:<StageTags stages={evaluationScopes}/>},{key:'expansion',label:'自动定向扩增',children:enableAutoExpansion?`已启用 · 上限 ${form.getFieldValue('maxEvaluationExpansion')||0} 张`:'未启用'},{key:'models',label:'模型配置',children:enableAutoExpansion?`${form.getFieldValue('evaluationExpansionLlm')} / ${form.getFieldValue('evaluationExpansionDiffusion')}`:'按评估项配置'},{key:'output',label:'结果产物',children:enableAutoExpansion?`${selectedInputDataset?.name||'-'} / 新版本`:'评估报告'}]}/></>}
-        {current==='自动优化'&&<><Form.Item name="optimization" label="基于评估结果自动优化（可不选）"><Checkbox.Group options={allowedOptimizations}/></Form.Item>{!allowedOptimizations.length?<Empty description="请先选择评估范围"/>:<Alert type="info" showIcon message="未选择自动优化时仅生成评估报告；选择后只处理命中问题或覆盖短板。"/>}{optimization.includes('隐私处理')&&<Form.Item label="隐私处理方式"><Select defaultValue="虚构替换" options={['掩码','泛化','虚构替换'].map(v=>({label:v,value:v}))}/></Form.Item>}{(optimization.includes('定向增强')||optimization.includes('定向扩增'))&&<Form.Item label="最大新增样本数"><InputNumber min={100} max={100000} defaultValue={5000}/></Form.Item>}</>}
+        {current==='自动优化'&&<><Form.Item name="optimization" label="基于评估结果自动优化（可不选）"><Checkbox.Group options={allowedOptimizations}/></Form.Item>{!allowedOptimizations.length?<Empty description="请先选择评估范围"/>:<Alert type="info" showIcon message="未选择自动优化时仅生成评估报告；选择后只处理命中问题或覆盖短板。"/>}{optimization.includes('隐私处理')&&<Form.Item label="隐私处理方式"><Select placeholder="请选择隐私处理方式" defaultValue="虚构替换" options={['掩码','泛化','虚构替换'].map(v=>({label:v,value:v}))}/></Form.Item>}{(optimization.includes('定向增强')||optimization.includes('定向扩增'))&&<Form.Item label="最大新增样本数"><InputNumber placeholder="请输入最大新增样本数（100～100000）" min={100} max={100000} defaultValue={5000}/></Form.Item>}</>}
         {current==='结果与提交'&&<>{optimization.length?<OutputConfig form={form} datasets={datasets} modality={draft.modality}/>:<Alert type="success" showIcon message="本任务仅生成评估报告，不创建新的数据集版本。报告将关联输入版本和本次任务。"/>}<Divider orientation="left">执行摘要</Divider><Descriptions bordered size="small" column={2} items={[{key:'1',label:'输入版本',children:form.getFieldValue('inputVersion')},{key:'2',label:'评估范围',children:<StageTags stages={evaluationScopes}/>},{key:'3',label:'自动优化',children:optimization.length?<StageTags stages={optimization}/>:<Tag>不执行</Tag>},{key:'4',label:'数据产物',children:optimization.length?'新数据集或新版本':'仅评估报告'}]}/></>}
       </div></Card>
     </Form>
@@ -667,6 +717,7 @@ function PreV3CreateTaskPage({ draft, datasets, onCancel, onSubmit }) {
   const evaluationScopes=Form.useWatch('evaluationScopes',form)||['质量评估'];
   const inputVersion=Form.useWatch('inputVersion',form);
   const isSynthesis=draft.taskType==='数据合成';
+  const automaticQuality=Form.useWatch('autoQualityEnabled',form);
   const isQuality=draft.taskType==='数据质检';
   const isAugmentation=draft.taskType==='数据增强';
   const isExpansion=draft.taskType==='定向扩增';
@@ -712,7 +763,7 @@ function PreV3CreateTaskPage({ draft, datasets, onCancel, onSubmit }) {
 
   const inputVersionFields=<>
     <Alert type="info" showIcon message={`${draft.taskType}针对一个确定、不可编辑的数据集版本执行。`}/>
-    <Form.Item name="inputVersion" label="输入数据集版本" rules={[{required:true,message:'请选择输入数据集版本'}]}><Select showSearch optionFilterProp="label" options={versionOptions}/></Form.Item>
+    <Form.Item name="inputVersion" label="输入数据集版本" rules={[{required:true,message:'请选择输入数据集版本'}]}><Select placeholder="请选择输入数据集版本" showSearch optionFilterProp="label" options={versionOptions}/></Form.Item>
     {selectedInputDataset&&<Alert className="section-title" type="success" showIcon message={`已识别业务类型：${selectedInputDataset.businessType}`} description={`${selectedInputDataset.name} · ${inputVersion}`}/>} 
     <Form.Item name="inputVersionStrategy" label="版本策略"><Radio.Group options={['锁定所选版本']}/></Form.Item>
   </>;
@@ -721,7 +772,7 @@ function PreV3CreateTaskPage({ draft, datasets, onCancel, onSubmit }) {
     <Form.Item name="evaluationScopes" label="质检范围" rules={[{required:true,message:'至少选择一项'}]}><Checkbox.Group options={['质量评估','隐私评估','覆盖评估']}/></Form.Item>
     {draft.modality==='文档图像'&&(businessType==='报关单'
       ? <CustomsEvaluationConfiguration form={form} scopes={evaluationScopes}/>
-      : <><Alert type="info" showIcon message="沿用现有文档质检配置" description="按所选版本执行质量、隐私与覆盖检查。"/><Row gutter={16} className="section-title"><Col span={12}><Form.Item name="evaluationSampleRange" label="评估样本范围"><Select options={['全部数据','随机抽样20%','分层抽样'].map(value=>({value,label:value}))}/></Form.Item></Col><Col span={12}><Form.Item name="evaluationPassThreshold" label="质量通过门槛"><Select options={[{value:70,label:'宽松（70分）'},{value:80,label:'标准（80分）'},{value:90,label:'严格（90分）'}]}/></Form.Item></Col></Row></>)}
+      : <><Alert type="info" showIcon message="沿用现有文档质检配置" description="按所选版本执行质量、隐私与覆盖检查。"/><Row gutter={16} className="section-title"><Col span={12}><Form.Item name="evaluationSampleRange" label="评估样本范围"><Select placeholder="请选择评估样本范围" options={['全部数据','随机抽样20%','分层抽样'].map(value=>({value,label:value}))}/></Form.Item></Col><Col span={12}><Form.Item name="evaluationPassThreshold" label="质量通过门槛"><Select placeholder="请选择质量通过门槛" options={[{value:70,label:'宽松（70分）'},{value:80,label:'标准（80分）'},{value:90,label:'严格（90分）'}]}/></Form.Item></Col></Row></>)}
     {draft.modality==='对话文本'&&<ConversationQualityExpansionFields form={form} mode="quality" standalone/>}
     {draft.modality==='时序数据'&&<ColdChainQualityFields form={form} mode="quality" standalone/>}
   </>;
@@ -764,9 +815,9 @@ function PreV3CreateTaskPage({ draft, datasets, onCancel, onSubmit }) {
   const defaultOutputName=draft.modality==='文档图像'?'文档图像数据集':draft.modality==='对话文本'?'智能客服多轮对话':'冷藏集装箱国际运输时序数据集';
   const defaultVersionNote=isSynthesis?'数据合成结果':isAugmentation?'数据增强结果':isExpansion?'定向扩增结果':'数据质检结果';
   return <div className="create-task-page">
-    <Flex justify="space-between" align="center" className="create-page-heading"><Space><Button type="text" shape="circle" icon={<LeftOutlined/>} aria-label={`返回${modalityLabel}任务列表`} onClick={onCancel}/><Title level={3}>{taskPageTitle}</Title></Space><Space><Button disabled={submitting} onClick={()=>message.success('草稿已保存')}>保存草稿</Button><Button type="primary" loading={submitting} onClick={submit}>提交任务</Button></Space></Flex>
+    <Flex justify="space-between" align="center" className="create-page-heading"><Space><Button type="text" shape="circle" icon={<LeftOutlined/>} aria-label={`返回${modalityLabel}任务列表`} onClick={onCancel}/><Title level={3}>{taskPageTitle}</Title></Space><Space><Button disabled={submitting} onClick={onCancel}>取消</Button><Button disabled={submitting} onClick={()=>message.success('草稿已保存')}>保存草稿</Button><Button type="primary" loading={submitting} onClick={submit}>提交任务</Button></Space></Flex>
     <Form form={form} layout="vertical" initialValues={{...(draft.modality==='文档图像'?SYNTHETIC_DOCUMENT_INITIAL_VALUES:draft.modality==='时序数据'?COLD_CHAIN_INITIAL_VALUES:CONVERSATION_TASK_INITIAL_VALUES),...modeValues,count:draft.modality==='对话文本'?20:10,outputMode:'newDataset',outputDatasetName:defaultOutputName,versionNote:defaultVersionNote,evaluationScopes:['质量评估'],inputVersionStrategy:'锁定所选版本',evaluationOcrModel:'pp-ocrv5-local',evaluationPassThreshold:80,evaluationSampleRange:'全部数据',evaluationQualityVlm:false,evaluationPrivacyVlm:false,evaluationCoverageVlm:true,evaluationQualityVlmModel:'qwen3-vl-8b-instruct',evaluationPrivacyVlmModel:'qwen3-vl-8b-instruct',evaluationCoverageVlmModel:'qwen3-vl-8b-instruct',evaluationPrivacyFields:CUSTOMS_EVALUATION_FIELDS.privacy,evaluationCoverageFields:CUSTOMS_EVALUATION_FIELDS.coverage,maxEvaluationExpansion:5000,evaluationExpansionLlm:'qwen3-14b-no-thinking',evaluationExpansionDiffusion:'qwen-image-edit',evaluationExpansionTargets:['低质样本替代','业务字段覆盖补齐','代码表取值覆盖补齐','视觉场景覆盖补齐','隐私失败样本替代'],...(draft.configSnapshot||{}),name:draft.name,description:draft.description,businessType:selectedBusinessType}}>
-      <Card className="task-fixed-header"><Row gutter={20} align="bottom"><Col span={12}><Form.Item name="name" label="任务名称" rules={[{required:true,message:'请输入任务名称'}]}><Input maxLength={50}/></Form.Item></Col><Col span={12}><Form.Item name="description" label="任务描述"><Input maxLength={200} placeholder="可随时修改"/></Form.Item></Col></Row></Card>
+      <Card className="task-fixed-header"><Row gutter={20} align="bottom"><Col span={12}><Form.Item name="name" label="任务名称" rules={[{required:true,message:'请输入任务名称'}]}><Input placeholder="请输入任务名称" maxLength={50}/></Form.Item></Col><Col span={12}><Form.Item name="description" label="任务描述"><Input maxLength={200} placeholder="可随时修改"/></Form.Item></Col></Row></Card>
       {isSynthesis&&<>
         <Card className="task-step-card" title="模板与数据合成配置">
           <Form.Item name="businessType" label="业务子类型" rules={[{required:true}]}><Segmented options={businessTypeMap[draft.modality]} onChange={changeBusinessType}/></Form.Item>
@@ -785,12 +836,10 @@ function PreV3CreateTaskPage({ draft, datasets, onCancel, onSubmit }) {
 }
 
 const PUBLISHED_TEMPLATE_PROFILES = [
-  { id:'TEMPLATE-DOC-20260902-E3A971', name:'贸易报关单版面分析模板', modality:'文档图像', businessType:'报关单', version:'1.0.0', trialStatus:'试运行通过', method:'版面分析法', outputFormat:'PNG + JSON', defaultModel:'Qwen3-VL-8B-Instruct' },
-  { id:'TEMPLATE-DOC-20260902-WB0012', name:'物流运单底图生成模板', modality:'文档图像', businessType:'运单', version:'1.0.0', trialStatus:'试运行通过', method:'底图生成法', outputFormat:'PNG + JSON', defaultModel:'Qwen3-VL-8B-Instruct', imageModel:'Doubao-Seedream-4.0', backgroundPrompt:'生成一张横版物流运单空白底图：保留规范表格、分区线、浅灰辅助线和右下角二维码占位，不生成任何真实姓名、地址、电话、单号或可识别文字。' },
-  { id:'TEMPLATE-CONV-20260902-C01A7B', name:'物流智能客服对话模板', modality:'对话文本', businessType:'智能客服多轮对话', version:'1.0.0', trialStatus:'试运行通过', outputFormat:'VERL SFT', defaultModel:'Qwen3-14B', configuration:{sampler:defaultConversationSampler()} },
-  { id:'TEMPLATE-CONV-20260902-AF2210', name:'物流异常反馈对话模板', modality:'对话文本', businessType:'异常反馈', version:'1.0.0', trialStatus:'试运行通过', outputFormat:'VERL SFT', defaultModel:'Qwen3-14B', configuration:{sampler:defaultConversationSampler()} },
-  { id:'TEMPLATE-TS-20260902-CC1024', name:'冷链运输时序模板', modality:'时序数据', businessType:'传感器时序', version:'1.0.0', trialStatus:'试运行通过', outputFormat:'JSONL + CSV', defaultModel:'Qwen3-14B', outputFields:'temperature、humidity、longitude、latitude、event_label' },
-  { id:'TEMPLATE-TS-20260902-GPS072', name:'车辆 GPS 轨迹时序模板', modality:'时序数据', businessType:'GPS轨迹', version:'1.0.0', trialStatus:'试运行通过', outputFormat:'JSONL + CSV', defaultModel:'Qwen3-14B', outputFields:'longitude、latitude、speed、heading、event_label' },
+  { id:'TEMPLATE-DOC-20260902-E3A971', name:'进口货物申报单模板', documentSnapshot:customsTemplateSnapshot, modality:'文档图像', businessType:'报关单', version:'1.0.0', trialStatus:'试运行通过', method:'版面分析法', outputFormat:'PNG + JSON', defaultModel:'Qwen3-VL-8B-Instruct' },
+  { id:'TEMPLATE-DOC-20260902-WB0012', name:'橙途速运运单模板', modality:'文档图像', businessType:'运单', version:'1.0.0', trialStatus:'试运行通过', method:'底图生成法', outputFormat:'PNG + JSON', defaultModel:'Qwen3-VL-8B-Instruct', imageModel:'Doubao-Seedream-4.0', backgroundPrompt:'生成一张横版物流运单空白底图：保留规范表格、分区线、浅灰辅助线和右下角二维码占位，不生成任何真实姓名、地址、电话、单号或可识别文字。' },
+  { id:'TEMPLATE-CONV-20260902-C01A7B', name:'物流智能客服对话模板', modality:'对话文本', businessType:'智能客服多轮对话', version:'1.0.0', trialStatus:'试运行通过', outputFormat:'messages JSONL', defaultModel:'Qwen3-14B', configuration:{sampler:defaultConversationSampler()} },
+  { id:'TEMPLATE-TS-20260902-CC1024', name:'冷藏集装箱多变量时序模板', modality:'时序数据', businessType:'传感器时序', version:'1.0.0', trialStatus:'试运行通过', outputFormat:'逐样本 JSON', defaultModel:'Qwen3-14B', outputFields:'temperature、humidity、longitude、latitude、event_label' },
 ];
 
 const TEMPLATE_QUALITY_RULES = {
@@ -851,7 +900,7 @@ const TEMPLATE_QUALITY_RULES = {
   ],
 };
 
-const templatesForModality = modality => PUBLISHED_TEMPLATE_PROFILES.filter(item=>item.modality===modality);
+const templatesForModality = modality => PUBLISHED_TEMPLATE_PROFILES.filter(item=>item.modality===modality&&!['TEMPLATE-CONV-20260902-AF2210','TEMPLATE-TS-20260902-GPS072'].includes(item.id));
 const templateForDataset = dataset => PUBLISHED_TEMPLATE_PROFILES.find(item=>item.id===dataset?.templateId)
   || PUBLISHED_TEMPLATE_PROFILES.find(item=>item.modality===dataset?.modality&&item.businessType===dataset?.businessType)
   || templatesForModality(dataset?.modality)[0];
@@ -860,138 +909,92 @@ function TemplateSnapshot({ template }) {
   if(!template)return <Alert type="warning" showIcon message="未找到可用的已发布模板" description="请先在模板中心完成模板试运行并发布。"/>;
   return <Descriptions bordered size="small" column={3} items={[
     {key:'name',label:'适用模板',children:<div><Text strong>{template.name}</Text><div className="muted-id">{template.id}</div></div>},
-    {key:'version',label:'模板版本',children:template.version},
+    
     {key:'business',label:'业务类型',children:template.businessType},{key:'method',label:'模板制作方式',children:template.method||'-'},{key:'trial',label:'试运行状态',children:<Tag color="green">{template.trialStatus}</Tag>},{key:'format',label:'输出格式',children:template.outputFormat},
   ]}/>;
 }
 
 function templateConfiguration(template){return template?.configuration||template?.selected_version?.configuration_v2||template?.selected_version?.configuration||{};}
-function templateQualityRules(modality,template){
-  const config=templateConfiguration(template);
-  const fixed=(TEMPLATE_QUALITY_RULES[modality]||[]).filter(rule=>{
-    if(modality!=='对话文本')return true;
-    if(rule.id==='SYSTEM-RULE-TRACE')return config.knowledge?.enabled!==false;
-    if(rule.id==='SYSTEM-TOOL')return Boolean(config.tools?.enabled);
-    return true;
-  }).map(rule=>rule.id==='SYSTEM-LABEL-COVERAGE'&&config.sampler?.dimensions?.length?{...rule,name:'采样维度覆盖率',target:'事件采样维度',content:`统计${config.sampler.dimensions.map(item=>item.name).join('、')}各枚举值的 PASS 数量和覆盖缺口。`}:rule);
-  const custom=modality==='对话文本'?(config.quality?.scenario_rules||[]):modality==='时序数据'?[...(config.quality?.base_rules||[]),...(config.quality?.rules||[]),...(config.fields||[]).flatMap(field=>{
-    const stored=field.quality_rules||[];
-    const rules=stored.length?stored:[{rule_id:`FIELD-${String(field.field_id||'UNKNOWN').toUpperCase()}`,name:`${field.label||field.field_id}质检`,mode:field.quality_mode||'function',prompt:field.quality_prompt||'',python_code:field.quality_python||''}];
-    return rules.map(rule=>({...rule,name:rule.name||`${field.label||field.field_id}质检`,target:field.label||field.field_id}));
-  })]:[];
-  const normalized=custom.filter(rule=>rule.enabled!==false).map((rule,index)=>({id:rule.id||rule.rule_id||`TEMPLATE-RULE-${index+1}`,name:rule.name||'模板自定义规则',category:rule.category||'模板自定义质检',target:rule.target||rule.scope||'整条样本',method:rule.method||(rule.mode==='semantic'?'语义判断':'规则判断'),engine:rule.engine||'',severity:rule.severity||'REVIEW',threshold:rule.threshold??'-',content:rule.content||rule.prompt||rule.description||rule.python_code||''}));
-  return [...fixed,...normalized.filter(rule=>!fixed.some(item=>item.id===rule.id))];
-}
+function templateQualityRules(modality,template){return templateRulesSnapshot(modality,template);}
 
-function TemplateRulesTable({ modality, template, title='模板质检规则', rules:providedRules }) {
-  const [query,setQuery]=useState('');
-  const [category,setCategory]=useState('全部');
-  const [target,setTarget]=useState('全部');
-  const [method,setMethod]=useState('全部');
-  const rules=providedRules||templateQualityRules(modality,template);
-  const categories=[...new Set(rules.map(rule=>rule.category))];
-  const targets=[...new Set(rules.map(rule=>rule.target))];
-  const methods=[...new Set(rules.map(rule=>rule.method))];
-  const filtered=rules.filter(rule=>(category==='全部'||rule.category===category)&&(target==='全部'||rule.target===target)&&(method==='全部'||rule.method===method)&&(!query||`${rule.name}${rule.id}`.toLowerCase().includes(query.toLowerCase())));
-  const columns=[
-    {title:'规则名称 / ID',width:220,render:(_,rule)=><div><Text strong>{rule.name}</Text><div className="muted-id">{rule.id}</div></div>},
-    {title:'规则分类',dataIndex:'category',width:120,render:(value,rule)=><Tag color={rule.privacy?'purple':value==='基础质检'?'green':value==='基础统计'?'blue':value==='自定义质检'?'gold':'default'}>{value}</Tag>},
-    {title:'检查对象',dataIndex:'target',width:150},{title:'判断方式',dataIndex:'method',width:130},
-    {title:'检测器 / 引擎',dataIndex:'engine',width:170,render:value=>value||'-'},
-    {title:'级别',dataIndex:'severity',width:90,render:value=><Tag color={value==='BLOCK'?'red':value==='REVIEW'?'orange':'blue'}>{value||'-'}</Tag>},
-    {title:'阈值 / 通过条件',dataIndex:'threshold',width:190},
-    {title:'规则内容',dataIndex:'content',width:260,ellipsis:true},
-    {title:'示例',width:190,render:(_,rule)=>rule.passExample||rule.failExample?<div><div>通过：{rule.passExample||'-'}</div><div>不通过：{rule.failExample||'-'}</div></div>:'-'},
-    {title:'执行状态',fixed:'right',width:100,render:()=> <Tag color="processing">本次执行</Tag>},
-  ];
-  return <Card className="task-step-card section-title" title={title} extra={<Text type="secondary">规则来自锁定的模板快照，只读</Text>}>
-    <TemplateSnapshot template={template}/>
-    <Flex justify="space-between" align="center" gap={12} wrap="wrap" className="task-rules-toolbar"><Space wrap><Select value={category} onChange={setCategory} style={{width:150}} options={['全部',...categories].map(value=>({value,label:value==='全部'?'全部规则分类':value}))}/><Select value={target} onChange={setTarget} style={{width:165}} options={['全部',...targets].map(value=>({value,label:value==='全部'?'全部检查对象':value}))}/><Select value={method} onChange={setMethod} style={{width:165}} options={['全部',...methods].map(value=>({value,label:value==='全部'?'全部判断方式':value}))}/></Space><Input allowClear prefix={<SearchOutlined/>} value={query} onChange={event=>setQuery(event.target.value)} placeholder="搜索规则名称或 ID" style={{width:240}}/></Flex>
-    <Table rowKey="id" size="small" columns={columns} dataSource={filtered} scroll={{x:1610}} pagination={false} expandable={{expandedRowRender:rule=><div className="task-rule-expanded"><Text strong>完整规则内容</Text><pre>{rule.content}</pre><Text copyable={{text:rule.content}}>复制完整内容</Text></div>}}/>
+function TemplateRulesTable({ modality, template, title='质检规则', rules:providedRules }) {
+  const rules=taskQualityRules(providedRules||templateQualityRules(modality,template));
+  return <Card className="task-step-card section-title" title={title}>
+    <Text type="secondary" style={{display:'block',marginBottom:12}}>{PRIVACY_SCOPE_NOTICE}</Text>
+    <UnifiedQualityEditor modality={modality} rules={rules} readOnly/>
   </Card>;
 }
 
-function TaskEvidencePanel({ title, identity, children, onOpenDetail }) {
-  return <Card className="task-evidence-card" title={<Space><span>{title}</span><Tag>只读</Tag></Space>} extra={onOpenDetail?<Button type="link" size="small" onClick={onOpenDetail}>查看完整详情</Button>:null}>
+function TaskEvidencePanel({ title, identity, children, onOpenDetail, showReadOnly = true }) {
+  return <Card className="task-evidence-card" title={<Space><span>{title}</span>{showReadOnly&&<Tag>只读</Tag>}</Space>} extra={onOpenDetail?<Button type="link" size="small" onClick={onOpenDetail}>查看完整详情</Button>:null}>
     {identity&&<div className="task-evidence-identity"><Text strong>{identity.name||'-'}</Text><Text type="secondary" copyable={Boolean(identity.id)}>{identity.id||'-'}</Text>{identity.updatedAt&&<Text type="secondary">更新时间：{formatDateTime(identity.updatedAt)}</Text>}</div>}
     {children}
   </Card>;
 }
 
 function TemplateEvidence({ template, modality }) {
-  if(!template)return <TaskEvidencePanel title="已发布模板"><Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="请先在右侧选择模板"/></TaskEvidencePanel>;
+  if(!template)return <TaskEvidencePanel title="模板" showReadOnly={false}><Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="请先选择模板"/></TaskEvidencePanel>;
   const rules=templateQualityRules(modality,template);
   const config=templateConfiguration(template);
   const conversationSampler=modality==='对话文本'?(config.sampler||defaultConversationSampler()):null;
   const samplingScenarios=conversationSampler?.scenarios||[];
   const samplingDimensions=conversationSampler?.dimensions||[];
-  return <TaskEvidencePanel title="已发布模板" identity={{name:template.name,id:template.id}}>
+  const document=documentSnapshot(template);
+  const outputSize=document.render_profile?.output_size||document.canvas;
+  return <TaskEvidencePanel title={template.name} showReadOnly={false}>
     <Descriptions size="small" column={1} bordered items={[
-      {key:'version',label:'正式版本',children:template.version},{key:'business',label:'业务类型',children:template.businessType},{key:'method',label:'生成方式',children:modality==='时序数据'?(config.generation?.method==='engine'?'引擎生成':'模型生成'):(template.method||'-')},{key:'format',label:'输出格式',children:modality==='对话文本'?'Messages 对话格式 · JSONL':template.outputFormat||'-'},{key:'model',label:'默认模型',children:template.defaultModel||config.trial_config?.model?.alias||config.trial_config?.model_alias||'-'},{key:'rules',label:'质检规则',children:`${rules.length} 条`},
+      {key:'id',label:'模板 ID',children:<Text copyable>{template.id}</Text>},
+      {key:'business',label:'业务类型',children:template.businessType},
+      {key:'method',label:'生成方式',children:modality==='时序数据'?(config.generation?.method==='engine'?'引擎生成':'模型生成'):(template.method||'-')},
+      ...(modality==='文档图像'?[
+        {key:'fieldCount',label:'字段数量',children:(document.texts||[]).filter(item=>item.kind==='fixed_label').length+(document.fields||[]).length},
+        {key:'resolution',label:'默认输出精度',children:outputSize?`${outputSize.width} × ${outputSize.height} px`:template.resolution||'-'},
+      ]:[]),
+      {key:'rules',label:'质检规则',children:`${rules.length} 条`},
     ]}/>
-    <Divider orientation="left">模板具体内容</Divider>
-    {modality==='文档图像'&&<Descriptions size="small" column={1} bordered items={[
-      {key:'resolution',label:'默认输出精度',children:template.resolution||'2480 × 1754'},{key:'layers',label:'模板图层',children:'底图、固定文字、动态字段、隐私保护层'},{key:'fields',label:'字段与标注',children:'字段 Key、数据类型、生成方式、文字样式、bbox / polygon'},{key:'privacy',label:'隐私保护',children:'安全虚构值、模糊处理及合成数据水印'},
-    ]}/>} 
+    {modality==='文档图像'?<DocumentTemplateFields key={template.id} snapshot={document}/>:<Divider orientation="left">模板具体内容</Divider>}
     {modality==='对话文本'&&<><Descriptions size="small" column={1} bordered items={[
       {key:'scenario',label:'场景与角色',children:config.scenario?.scene_markdown||template.businessType},{key:'roles',label:'角色与权限',children:'服务角色身份、服务角色权限和用户角色身份均由模板锁定'},{key:'knowledge',label:'知识卡',children:config.knowledge?.enabled?`${(String(config.knowledge.text||'').match(/\[知识卡 /g)||[]).length} 张 · ${config.knowledge.usage_instructions||'按场景选用'}`:'未启用'},{key:'tools',label:'工具调用',children:config.tools?.enabled?`${config.tools.catalog?.length||0} 个工具 · 保留模拟调用轨迹`:'未启用'},{key:'fewshot',label:'参考对话',children:config.few_shot?.enabled?'已启用，按普通/知识卡/工具轨迹分类':'未启用'},{key:'completion',label:'完成要求',children:config.scenario?.completion_requirements_markdown||'-'},
     ]}/><Divider orientation="left">{samplingDimensions.length?'事件采样维度':'可采样场景'}</Divider>{samplingDimensions.length?<Table rowKey="name" size="small" pagination={false} dataSource={samplingDimensions} columns={[{title:'维度名称',dataIndex:'name'},{title:'维度说明',dataIndex:'description',render:value=>value||'-'},{title:'维度可选值',dataIndex:'values',render:values=><Space wrap>{(values||[]).map(value=><Tag key={value}>{value}</Tag>)}</Space>}]}/>:<Table rowKey="id" size="small" pagination={false} dataSource={samplingScenarios} columns={[{title:'子场景',render:(_,row)=><div><Text strong>{row.name}</Text><div className="muted-id">{row.id}</div></div>},{title:'场景目标',dataIndex:'goal'},{title:'合法案例',width:85,render:(_,row)=>row.cases?.length||0},{title:'交互分支',width:85,render:(_,row)=>row.profiles?.length||0}]}/>}</>}
     {modality==='时序数据'&&<Descriptions size="small" column={1} bordered items={[
       {key:'scene',label:'时序场景',children:config.event_generation?.scene_config?.business_scene_description||template.description||'-'},{key:'events',label:'事件定义',children:(config.event_generation?.event_definitions||[]).map(item=>item.name).join('、')||'-'},{key:'fields',label:'输出字段',children:(config.fields||[]).filter(item=>item.enabled!==false).map(item=>`${item.label||item.field_id}${item.unit?`（${item.unit}）`:''}`).join('、')||template.outputFields||'-'},{key:'generation',label:'生成方式',children:config.generation?.method==='engine'?`引擎生成 · ${config.generation?.engine_id||config.rule_engine?.engine_id||'-'}`:'模型生成 · 两阶段联合生成'},{key:'dimensions',label:'事件采样维度',children:(config.event_generation?.sampling_dimensions||[]).map(item=>item.name).join('、')||'-'},{key:'relation',label:'规则范围',children:'逐字段变化规则、事件定义、字段关联、时间连续性与事件一致性'},
     ]}/>} 
-    <TemplateRulesTable modality={modality} template={template} rules={rules} title="模板完整质检规则"/>
+    <TemplateRulesTable modality={modality} template={template} rules={rules} title="质检规则"/>
   </TaskEvidencePanel>;
 }
 
-function QualityRulesEvidence({ template, modality }) {
-  const rules=templateQualityRules(modality,template);
-  const categorySummary=[...new Set(rules.map(rule=>rule.category))].map(category=>`${category} ${rules.filter(rule=>rule.category===category).length} 条`).join('，');
-  return <TaskEvidencePanel title="模板质检规则" identity={{name:template?.name,id:template?.id}}>
-    <TemplateSnapshot template={template}/>
-    <Alert className="section-title" type="info" showIcon message={`${rules.length} 条规则将按模板快照执行`} description={`${categorySummary}。Dingo 接管重复能力，系统保留领域契约；BLOCK / REVIEW / INFO 按规则级别判定。`}/>
-    <TemplateRulesTable modality={modality} template={template} rules={rules} title="本次执行的完整规则内容"/>
+function QualityRulesEvidence({ template, modality, version }) {
+  if(!version||!template)return null;
+  const rules=taskQualityRules(templateQualityRules(modality,template));
+  return <TaskEvidencePanel title={template.name} showReadOnly={false}>
+    <Descriptions bordered size="small" column={1} items={[
+      {key:'id',label:'模板 ID',children:<Text copyable>{template.id}</Text>},
+      {key:'business',label:'业务类型',children:template.businessType||'-'},
+      ...(template.method?[{key:'method',label:'模板制作方式',children:template.method}]:[]),
+      {key:'count',label:'质检规则数量',children:`${rules.length} 条`},
+    ]}/>
+    <TemplateRulesTable key={`${template.id}-${version.version}`} modality={modality} template={template} rules={rules} title="质检规则"/>
   </TaskEvidencePanel>;
 }
 
-function QualityReportEvidence({ dataset, version }) {
-  if(!version)return <TaskEvidencePanel title="输入版本质检报告"><Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="请先在右侧选择数据集和版本"/></TaskEvidencePanel>;
-  const report=version.qualityReport||{};
-  const counts=report.statusCounts||{};
-  const gaps=report.coverageGaps||[];
-  return <TaskEvidencePanel title="输入版本质检报告" identity={{name:dataset?.name,id:report.reportId||version.qualityReportId,updatedAt:version.updatedAt}}>
-    <Descriptions size="small" column={1} bordered items={[
-      {key:'dataset',label:'数据集 ID',children:<Text copyable>{dataset?.id||'-'}</Text>},{key:'version',label:'版本 ID',children:<Text copyable>{version.version}</Text>},{key:'source-task',label:'来源任务',children:<div>{version.sourceName||'-'}<div className="muted-id">{version.source||'-'}</div></div>},{key:'source-version',label:'来源数据集版本',children:version.sourceVersionId||'-'},{key:'template',label:'模板血缘',children:<div>{PUBLISHED_TEMPLATE_PROFILES.find(item=>item.id===version.templateId)?.name||version.templateId||'-'}<div className="muted-id">{version.templateId||'-'} / {version.templateVersion||'-'}</div></div>},{key:'scope',label:'质检范围',children:report.executionRange==='sample'?'部分抽检':'全量质检'},{key:'count',label:'样本总数',children:numericSampleCount(version.samples).toLocaleString()},{key:'checked',label:'已质检 / 未质检',children:`${Number(report.checkedSampleCount??numericSampleCount(version.samples)).toLocaleString()} / ${Number(report.uncheckedSampleCount??counts.UNCHECKED??0).toLocaleString()}`},
-    ]}/>
-    <div className="task-evidence-status-grid">{['PASS','REVIEW','REJECT','UNCHECKED'].map(key=><div key={key}><Text type="secondary">{key}</Text><Text strong>{Number(counts[key]||0).toLocaleString()}</Text></div>)}</div>
-    <Divider orientation="left">报告摘要</Divider>
-    <Descriptions size="small" column={1} items={[
-      {key:'score',label:'平均质量分',children:report.averageScore??version.quality??'-'},{key:'privacy',label:'隐私命中',children:report.privacy?.initialRiskCount??report.privacyHits??0},{key:'gaps',label:'覆盖缺口',children:`${gaps.length} 项`},
-    ]}/>
-    <Divider orientation="left">完整质检指标</Divider><VersionQualityReport dataset={dataset} version={version}/>
-    <Divider orientation="left">逐规则质检结果</Divider>
-    <Table rowKey="id" size="small" pagination={false} scroll={{x:900}} dataSource={report.ruleSnapshot||TEMPLATE_QUALITY_RULES[dataset?.modality]||[]} columns={[
-      {title:'规则名称 / ID',width:210,render:(_,rule)=><div><Text strong>{rule.name}</Text><div className="muted-id">{rule.id}</div></div>},{title:'分类',dataIndex:'category',width:100,render:(value,rule)=><Tag color={rule.privacy?'blue':'green'}>{value}</Tag>},{title:'检查对象',dataIndex:'target',width:130},{title:'方式',dataIndex:'method',width:100},{title:'阈值 / 通过条件',dataIndex:'threshold',width:170},{title:'规则内容',dataIndex:'content',width:260},{title:'结果',fixed:'right',width:90,render:()=><Tag color="green">PASS</Tag>},
-    ]}/>
-    <Divider orientation="left">标签覆盖与建议缺口</Divider>
-    {!!gaps.length?<Table rowKey="key" size="small" pagination={false} dataSource={gaps} columns={[{title:'维度',dataIndex:'dimension'},{title:'标签值',dataIndex:'label'},{title:'当前 PASS',dataIndex:'pass',width:90},{title:'目标数',dataIndex:'target',width:80},{title:'缺口',dataIndex:'gap',width:70}]}/>:<Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="当前报告没有覆盖缺口"/>} 
-  </TaskEvidencePanel>;
+function QualityReportEvidence({dataset,version}){
+  return <TaskEvidencePanel title={dataset?.name||'数据集'} showReadOnly={false}>{version?.qualityReport?<RuleQualityReport key={version.qualityReport.reportId} report={version.qualityReport} compact/>:<Empty description="请选择数据集版本和质检报告"/>}</TaskEvidencePanel>;
 }
 
-function ModelWithParameters({ form, modelName='generationModel', parameterSwitchName='generationParametersEnabled', parameterName='generationParameters', label='生成模型' }) {
-  const enabled=Form.useWatch(parameterSwitchName,form);
-  return <><Form.Item name={modelName} label={label} rules={[{required:true,message:`请选择${label}`}]}><Select options={['Qwen3-14B','Qwen3-VL-8B-Instruct','Doubao-Seedream-4.0','DeepSeek-V3.1'].map(value=>({value,label:value}))}/></Form.Item><Flex justify="space-between" align="center" className="form-switch-line"><div><Text strong>{label}参数（可选）</Text><div><Text type="secondary">开启后以 JSON 形式覆盖模板试运行参数</Text></div></div><Form.Item name={parameterSwitchName} valuePropName="checked" noStyle><Switch/></Form.Item></Flex>{enabled&&<Form.Item name={parameterName} rules={[{validator:(_,value)=>{try{JSON.parse(value||'{}');return Promise.resolve();}catch{return Promise.reject(new Error('请输入合法 JSON'));}}}]}><Input.TextArea rows={5} className="json-textarea"/></Form.Item>}</>;
+function ModelWithParameters({ form, modelName='generationModel', parameterSwitchName='generationParametersEnabled', parameterName='generationParameters', label='生成模型', models=['Qwen3-14B','Qwen3-VL-8B-Instruct','Doubao-Seedream-4.0','DeepSeek-V3.1'], initialModel }) {
+  return <FormModelConfig form={form} modelName={modelName} parameterSwitchName={parameterSwitchName} parameterName={parameterName} label={label} options={models.map(value=>({value,label:value}))} initialModel={initialModel} allowEmpty help="关闭后沿用模板试运行参数；开启后用此处 JSON 覆盖。"/>;
 }
 
 function ApiEstimate({ items }) {
   const total=items.reduce((sum,item)=>sum+Number(item.value||0),0);
-  return <Descriptions bordered size="small" column={Math.min(4,items.length+1)} items={[...items.map((item,index)=>({key:index,label:item.label,children:Number(item.value||0).toLocaleString()})),{key:'total',label:'总调用次数预估',children:<Text strong>{total.toLocaleString()}</Text>}]}/>;
+  return <Descriptions bordered size="small" column={Math.min(4,items.length+1)} items={[...items.map((item,index)=>({key:index,label:item.label,children:Number(item.value||0).toLocaleString()})),{key:'total',label:'调用预估（不含重试）',children:<Text strong>{total.toLocaleString()}</Text>}]}/>;
 }
 
 function ApiUsageSummary({ usage={} }) {
   return <Descriptions bordered size="small" column={3} items={[
     {key:'model',label:'模型调用次数',children:Number(usage.model||0).toLocaleString()},
     {key:'image',label:'图像模型调用次数',children:Number(usage.image||0).toLocaleString()},
-    {key:'tokens',label:'调用 Tokens 数',children:Number(usage.tokens||0).toLocaleString()},
+    {key:'tokens',label:'调用 Tokens 数',children:usage.tokens===null?'未返回':Number(usage.tokens||0).toLocaleString()},
   ]}/>;
 }
 
@@ -1040,7 +1043,7 @@ function DimensionRatioSamplingCard({form,dimensions=[],sampleCount,title='按�
     <Table className="section-title" size="small" pagination={false} rowKey="key" dataSource={rows} scroll={conditionColumnWidth?{x:1000}:undefined} columns={[
       {title:'采样维度',width:180,render:(_,row)=><div><Text strong>{row.dimension.name}</Text><div className="muted-id">{row.dimension.dimension_id}</div></div>},
       {title:'枚举值',dataIndex:'optionName',width:180},
-      {title:'目标占比',width:180,render:(_,row)=><InputNumber min={0} max={100} precision={0} addonAfter="%" value={row.targetRatio} onChange={value=>update(row.dimension,row.optionName,value)}/>},
+      {title:'目标占比',width:180,render:(_,row)=><InputNumber placeholder="请输入目标占比（0～100）" min={0} max={100} precision={0} addonAfter="%" value={row.targetRatio} onChange={value=>update(row.dimension,row.optionName,value)}/>},
       {title:'预计样本数',width:140,render:(_,row)=>`约 ${Math.round(Number(sampleCount||0)*row.targetRatio/100)} 条`},
       {title:'适用条件 / 禁止条件',width:conditionColumnWidth,render:(_,row)=><><div>{row.dimension.applicability_conditions||'所有样本'}</div>{row.dimension.prohibited_conditions&&<Text type="secondary">禁止：{row.dimension.prohibited_conditions}</Text>}</>},
     ]}/>
@@ -1124,8 +1127,8 @@ function ConversationTaskSamplingCard({ form, sampler, sampleCount }) {
     { title: '场景目标', dataIndex: 'goal' },
     { title: '合法案例', width: 90, render: (_, row) => row.cases?.length || 0 },
     { title: '交互分支', width: 90, render: (_, row) => row.profiles?.length || 0 },
-    ...(mode === 'ratio' ? [{ title: '目标占比', width: 135, render: (_, row) => <InputNumber min={0} max={100} precision={0} addonAfter="%" disabled={allocationMap.get(row.id)?.selected === false} value={allocationMap.get(row.id)?.targetRatio || 0} onChange={value => updateAllocation(row.id, { targetRatio: Number(value || 0) })}/> }] : []),
-    ...(mode === 'count' ? [{ title: '目标数量', width: 135, render: (_, row) => <InputNumber min={0} max={100000} precision={0} addonAfter="条" disabled={allocationMap.get(row.id)?.selected === false} value={allocationMap.get(row.id)?.targetCount || 0} onChange={value => updateAllocation(row.id, { targetCount: Number(value || 0) })}/> }] : []),
+    ...(mode === 'ratio' ? [{ title: '目标占比', width: 135, render: (_, row) => <InputNumber placeholder="请输入目标占比（0～100）" min={0} max={100} precision={0} addonAfter="%" disabled={allocationMap.get(row.id)?.selected === false} value={allocationMap.get(row.id)?.targetRatio || 0} onChange={value => updateAllocation(row.id, { targetRatio: Number(value || 0) })}/> }] : []),
+    ...(mode === 'count' ? [{ title: '目标数量', width: 135, render: (_, row) => <InputNumber placeholder="请输入目标数量（0～100000）" min={0} max={100000} precision={0} addonAfter="条" disabled={allocationMap.get(row.id)?.selected === false} value={allocationMap.get(row.id)?.targetCount || 0} onChange={value => updateAllocation(row.id, { targetCount: Number(value || 0) })}/> }] : []),
     { title: '折算占比', width: 105, render: (_, row) => `${((row.ratio || 0) * 100).toFixed(1)}%` },
     { title: '计划生成数', width: 110, render: (_, row) => `${row.quota || 0} 条` },
   ];
@@ -1143,7 +1146,7 @@ function ConversationTaskSamplingCard({ form, sampler, sampleCount }) {
       <Alert type="error" showIcon message={mode === 'ratio' ? `当前目标占比合计 ${configuredTotal}%，必须等于 100%` : `当前目标数量合计 ${configuredTotal} 条，必须等于样本总数 ${Number(sampleCount || 0)} 条`}/>
     )}
     <Flex justify="space-between" align="center" className="form-switch-line"><div><Text strong>自定义交互分支分布（高级配置）</Text><div><Text type="secondary">默认在每个子场景的合法交互分支中均匀分配</Text></div></div><Form.Item name="samplingAdvancedEnabled" valuePropName="checked" noStyle><Switch/></Form.Item></Flex>
-    {advancedEnabled && <Table rowKey={row => `${row.scenarioId}:${row.id}`} size="small" pagination={false} dataSource={branchRows} columns={[{title:'子场景',dataIndex:'scenarioName'},{title:'交互分支',render:(_,row)=><div><Text>{row.name}</Text><div className="muted-id">{row.id}</div></div>},{title:'目标占比',width:180,render:(_,row)=><InputNumber min={0} max={100} addonAfter="%" value={branchMap.get(`${row.scenarioId}:${row.id}`)?.targetRatio || 0} onChange={value=>updateBranch(row.scenarioId,row.id,{targetRatio:Number(value||0)})}/>}]} />}
+    {advancedEnabled && <Table rowKey={row => `${row.scenarioId}:${row.id}`} size="small" pagination={false} dataSource={branchRows} columns={[{title:'子场景',dataIndex:'scenarioName'},{title:'交互分支',render:(_,row)=><div><Text>{row.name}</Text><div className="muted-id">{row.id}</div></div>},{title:'目标占比',width:180,render:(_,row)=><InputNumber placeholder="请输入目标占比（0～100）" min={0} max={100} addonAfter="%" value={branchMap.get(`${row.scenarioId}:${row.id}`)?.targetRatio || 0} onChange={value=>updateBranch(row.scenarioId,row.id,{targetRatio:Number(value||0)})}/>}]} />}
     <Descriptions className="section-title" bordered size="small" column={3} items={[{key:'stage1',label:'阶段一事件生成',children:`${sampleCount} 次`},{key:'stage2',label:'阶段二完整对话',children:`${sampleCount} 次`},{key:'mock',label:'Mock 实际调用',children:'0 次'}]}/>
   </Card>;
 }
@@ -1154,11 +1157,55 @@ function normalizePublishedTemplate(item,modality){
   return {...item,id:item.id||item.template_id,name:item.name||identity.name||config.name,businessType:item.businessType||item.business_type||identity.business_type||config.business_type,version:item.version||item.selected_version?.version||'V1',description:item.description||identity.description||config.description||'',configuration:config,outputFormat:modality==='对话文本'?'Messages 对话格式 · JSONL':item.outputFormat||'JSONL',defaultModel:item.defaultModel||config.trial_config?.model?.alias||config.trial_config?.model_alias||'Qwen3-14B'};
 }
 
-function CreateTaskPage({ draft, datasets, onCancel, onSubmit }) {
+function SemanticCustomRules({form,name,legacyPrefix}){
+  const legacy=form.getFieldValue(legacyPrefix+'Enabled')?[{name:form.getFieldValue(legacyPrefix+'Name')||'',prompt:form.getFieldValue(legacyPrefix+'Prompt')||''}]:[];
+  return <Form.List name={name} initialValue={legacy}>{(fields,{add,remove})=><div className="section-title">
+    <Flex justify="space-between" align="center" style={{marginBottom:12}}><Text strong>自定义语义增强规则</Text><Button onClick={()=>add({name:'',prompt:''})}>添加规则</Button></Flex>
+    {fields.map((field,index)=><Card key={field.key} size="small" title={`规则 ${index+1}`} style={{marginBottom:12}} extra={<Button type="link" danger onClick={()=>remove(field.name)}>删除</Button>}>
+      <Form.Item name={[field.name,'name']} label="规则名称" rules={[{required:true,whitespace:true,message:'请输入规则名称'}]}><Input maxLength={80} placeholder="填写规则名称"/></Form.Item>
+      <Form.Item name={[field.name,'prompt']} label="增强 Prompt" rules={[{required:true,whitespace:true,message:'请输入增强 Prompt'}]}><Input.TextArea rows={3} placeholder="描述需要如何增强内容"/></Form.Item>
+    </Card>)}
+  </div>}</Form.List>;
+}
+function MandatoryPrivacyOption() {
+  return <Tooltip title="系统固定执行隐私检查，并按各检测规则的处理方式处理命中内容，不可取消。"><span><Checkbox className="mandatory-privacy-checkbox" checked disabled>隐私增强</Checkbox></span></Tooltip>;
+}
+function EnhancementTypes({value=[],onChange}) {
+  return <Space wrap><Checkbox.Group value={value} onChange={onChange} options={['图像增强','语义增强','背景增强']}/></Space>;
+}
+function PrivacyHandlingRules({form,rows=[],sampleCount=1000}) {
+  const rules=conversationCatalogRules().filter(r=>r.category==='隐私质检'&&!r.example);
+  const legacy=form.getFieldValue('privacyMethods')||{};
+  const fallback=form.getFieldValue('conversationPrivacyMethod')||form.getFieldValue('timeseriesPrivacyMethod');
+  return <Table rowKey="id" size="small" pagination={false} dataSource={rules} columns={[
+    {title:'检测规则',render:(_,r)=><span>{r.name}<span className="muted-id"> · {r.id}</span></span>},
+    {title:'命中次数',width:110,render:(_,r)=>{const match=rows.find(x=>x.id===r.id||x.name===r.name);return match?.hitCount??match?.occurrenceCount??(Math.ceil(Math.min(sampleCount,Number(r.id.slice(1))*83%900+64)*1.4));}},
+    {title:'涉及样本数',width:120,render:(_,r)=>{const match=rows.find(x=>x.id===r.id||x.name===r.name);return match&&!match.unavailable?(match.counts?.FAIL??(Math.min(sampleCount,Number(r.id.slice(1))*83%900+64))):(Math.min(sampleCount,Number(r.id.slice(1))*83%900+64));}},
+    {title:'处理方式',width:220,render:(_,r)=>{
+      const old=Object.entries(legacy).find(([name])=>r.name.includes(name))?.[1];
+      return <Form.Item name={['privacyMethods',r.name]} initialValue={old||fallback||'部分掩码'} noStyle><Select placeholder="请选择处理方式" aria-label={`${r.name}处理方式`} style={{width:'100%'}} options={['部分掩码','全掩码','删除','泛化','随机替换','虚构替换'].map(value=>({value,label:value}))}/></Form.Item>;
+    }}
+  ]}/>;
+}
+function PrivacyRuleSummary({rows=[],methods=false}) {
+  const data=rows.filter(r=>r.privacy||r.category==='隐私质检');
+  return <div className="privacy-summary"><Table rowKey="id" size="small" pagination={false} dataSource={data} columns={[
+    {title:'隐私规则',render:(_,r)=><>{r.name}<div className="muted-id">{r.id}</div></>},
+    {title:'命中次数',render:(_,r)=>r.hitCount??r.occurrenceCount??'未记录'},
+    {title:'涉及样本数',render:(_,r)=>r.unavailable?'未记录':r.counts?.FAIL??0},
+    ...(methods?[{title:'处理方式',render:(_,r)=><Form.Item name={['privacyMethods',r.name]} initialValue="部分掩码" noStyle><Select placeholder="请选择处理方式" style={{width:150}} options={['部分掩码','全掩码','删除','泛化','随机替换','虚构替换'].map(value=>({value,label:value}))}/></Form.Item>}]:[])
+  ]}/><Text type="secondary" className="form-help">次数统计检测对象，样本数按单条规则去重；历史报告未记录次数时不作推算。不同规则的样本数不可直接相加。</Text></div>;
+}
+
+function CreateTaskPage({ draft, datasets, onCancel, onSubmit, onSaveDraft }) {
+  const [workspaceTab,setWorkspaceTab]=useState("configure");
+  const [basisOpen,setBasisOpen]=useState(false),[basisTab,setBasisTab]=useState('report');
+  const openBasis=tab=>{setBasisTab(tab);setBasisOpen(true);};
   const [submitting,setSubmitting]=useState(false);
   const [publishedTemplates,setPublishedTemplates]=useState(()=>templatesForModality(draft.modality));
   const [form]=Form.useForm();
   const isSynthesis=draft.taskType==='数据合成';
+  const automaticQuality=Form.useWatch('autoQualityEnabled',form);
   const isQuality=draft.taskType==='数据质检';
   const isAugmentation=draft.taskType==='数据增强';
   const isExpansion=draft.taskType==='定向扩增';
@@ -1167,10 +1214,10 @@ function CreateTaskPage({ draft, datasets, onCancel, onSubmit }) {
   const templateId=Form.useWatch('templateId',form);
   const inputDatasetId=Form.useWatch('inputDatasetId',form);
   const inputVersionId=Form.useWatch('inputVersionId',form);
-  const sampleSelection=Form.useWatch('sampleSelection',form)||'pass';
-  const selectionThreshold=Form.useWatch('selectionThreshold',form)||75;
   const customEnhancementEnabled=Form.useWatch('customEnhancementEnabled',form);
   const documentEnhancementTypes=Form.useWatch('documentEnhancementTypes',form)||[];
+  // Subscribe on every render; toggling the panel must not change Hook order.
+  const documentSemanticRules=Form.useWatch('documentSemanticRules',form)||[];
   const documentSemanticCustomEnabled=Form.useWatch('documentSemanticCustomEnabled',form);
   const documentBackgroundCustomEnabled=Form.useWatch('documentBackgroundCustomEnabled',form);
   const timeseriesEventCustomEnabled=Form.useWatch('timeseriesEventCustomEnabled',form);
@@ -1188,10 +1235,23 @@ function CreateTaskPage({ draft, datasets, onCancel, onSubmit }) {
   const samplingRatio=Number(Form.useWatch('samplingRatio',form)||10);
   const eligibleDatasets=useMemo(()=>datasets.filter(dataset=>dataset.modality===draft.modality&&dataset.templateId),[datasets,draft.modality]);
   const selectedDataset=eligibleDatasets.find(dataset=>dataset.id===inputDatasetId);
-  const selectedTemplate=isSynthesis?publishedTemplates.find(item=>item.id===templateId):(publishedTemplates.find(item=>item.id===selectedDataset?.templateId)||templateForDataset(selectedDataset));
-  const effectiveQualityRules=templateQualityRules(draft.modality,selectedTemplate);
-  const semanticRuleCount=effectiveQualityRules.filter(rule=>/LLM|Embedding|语义/.test(`${rule.method||''}${rule.engine||''}`)).length;
-  const selectedVersion=selectedDataset?.versions.find(version=>version.version===inputVersionId);
+  const sourceTemplateVersion=selectedDataset?.versions.find(item=>item.version===inputVersionId);
+  const selectedTemplate=isSynthesis?publishedTemplates.find(item=>item.id===templateId):(sourceTemplateVersion?.taskConfigSnapshot?.templateProfile||sourceTemplateVersion?.sampleExecution?.configSnapshot?.templateProfile||publishedTemplates.find(item=>item.id===(sourceTemplateVersion?.templateId||selectedDataset?.templateId)&&(!sourceTemplateVersion?.templateVersion||item.version===sourceTemplateVersion.templateVersion))||templateForDataset(selectedDataset));
+  const rawSelectedVersion=sourceTemplateVersion;
+  const availableReports=useMemo(()=>versionReportsForDisplay(selectedDataset||{},rawSelectedVersion),[selectedDataset,rawSelectedVersion]);
+  const reportSelectionId=Form.useWatch('qualityReportId',form);
+  const lockedReport=availableReports.find(report=>report.reportId===reportSelectionId)||preferredQualityReport(availableReports);
+  const effectiveQualityRules=taskQualityRules((isAugmentation||isExpansion)&&lockedReport?.ruleSnapshot?.length?lockedReport.ruleSnapshot:templateQualityRules(draft.modality,selectedTemplate));
+  const semanticRuleCount=effectiveQualityRules.filter(rule=>/LLM|VLM|Embedding|语义|模型|semantic|vlm/i.test(`${rule.method||''}${rule.engine||''}${rule.mode||''}`)).length;
+  const qualityReportId=reportSelectionId;
+  const selectedReport=availableReports.find(report=>report.reportId===qualityReportId)||preferredQualityReport(availableReports);
+  const selectedVersion=(isAugmentation||isExpansion)?versionWithReport(rawSelectedVersion,selectedReport):rawSelectedVersion;
+  useEffect(()=>{
+    if(!isAugmentation&&!isExpansion)return;
+    const existing=form.getFieldValue('qualityReportId');
+    if(!availableReports.some(report=>report.reportId===existing)||availableReports.some(report=>report.protocolVersion===2)&&availableReports.find(report=>report.reportId===existing)?.protocolVersion!==2)
+      form.setFieldValue('qualityReportId',preferredQualityReport(availableReports)?.reportId);
+  },[inputDatasetId,inputVersionId,availableReports,form,isAugmentation,isExpansion]);
   const selectedVersionSampleCount=numericSampleCount(selectedVersion?.samples);
   const qualityCheckedSampleCount=qualityScope==='full'?selectedVersionSampleCount:Math.min(selectedVersionSampleCount,Math.max(1,Math.ceil(selectedVersionSampleCount*samplingRatio/100)));
   const qualityUncheckedSampleCount=Math.max(0,selectedVersionSampleCount-qualityCheckedSampleCount);
@@ -1200,31 +1260,48 @@ function CreateTaskPage({ draft, datasets, onCancel, onSubmit }) {
   const generationMethod=selectedTemplate?.configuration?.generation?.method||'model';
   const conversationSamplingState=useMemo(()=>draft.modality==='对话文本'?taskSamplingPlan(conversationSampler,sampleCount,samplingMode,samplingAllocations,samplingAdvancedEnabled,samplingBranchAllocations):{rows:[],error:''},[conversationSampler,draft.modality,sampleCount,samplingMode,samplingAllocations,samplingAdvancedEnabled,samplingBranchAllocations]);
   const datasetOptions=eligibleDatasets.filter(dataset=>{
-    if(isQuality)return dataset.versions.length>0;
-    if(isAugmentation)return dataset.versions.some(isFullQualityVersion);
-    if(isExpansion)return dataset.versions.some(isFullQualityVersion);
+    if(isQuality)return dataset.versions.some(published);
+    if(isAugmentation)return dataset.versions.some(isQualityCheckedVersion);
+    if(isExpansion)return dataset.versions.some(isQualityCheckedVersion);
     return true;
   }).map(dataset=>({value:dataset.id,label:`${dataset.name} / ${dataset.id}`}));
   const versionOptions=(selectedDataset?.versions||[]).filter(version=>{
+    if(!published(version))return false;
     if(isQuality)return Boolean(selectedDataset.templateId);
-    if(isAugmentation)return isFullQualityVersion(version);
-    if(isExpansion)return isFullQualityVersion(version);
+    if(isAugmentation)return isQualityCheckedVersion(version);
+    if(isExpansion)return isQualityCheckedVersion(version);
     return true;
   }).map(version=>({value:version.version,label:`${version.version} · ${numericSampleCount(version.samples).toLocaleString()} 条 · ${version.versionKind||'数据版本'}`}));
-  const statusCounts=selectedVersion?.qualityReport?.statusCounts||{};
-  const passCount=Number(statusCounts.PASS||0);
-  const selectableCount=sampleSelection==='pass'?passCount:Math.min(numericSampleCount(selectedVersion?.samples),Math.round(numericSampleCount(selectedVersion?.samples)*(1-(selectionThreshold/100)*.45)));
-  const privacyHits=selectedVersion?.qualityReport?.privacy?.initialRiskCount||selectedVersion?.qualityReport?.privacyHits||0;
+  const selectionRules=reportRuleRows(selectedReport).filter(r=>!r.unavailable);
+  const [augmentationMode,setAugmentationMode]=useState('pass'),[augmentationThreshold,setAugmentationThreshold]=useState(100);
+  const [includeUnchecked,setIncludeUnchecked]=useState(false);
+  useEffect(()=>setIncludeUnchecked(false),[inputDatasetId,inputVersionId,selectedReport?.reportId]);
+  useEffect(()=>{setAugmentationMode('pass');setAugmentationThreshold(100);},[inputDatasetId,inputVersionId,selectedReport?.reportId]);
+  const augmentationCandidates=useMemo(()=>augmentationPool(selectedReport,augmentationMode,augmentationThreshold),[selectedReport,augmentationMode,augmentationThreshold]);
+  const selectableCount=isAugmentation?augmentationCandidates.count+(includeUnchecked?augmentationCandidates.uncheckedCount:0):0;
+  useEffect(()=>{
+    if(!isAugmentation||!inputVersionId||!selectedVersion)return;
+    const current=form.getFieldValue('targetCount');
+    const next=selectableCount;
+    if(current!==next)form.setFieldValue('targetCount',next);
+  },[form,isAugmentation,inputDatasetId,inputVersionId,selectableCount]);
+  const privacyHits=selectionRules.filter(r=>r.privacy||r.category==='隐私质检').reduce((n,r)=>n+r.counts.FAIL,0);
   const coverageGaps=selectedVersion?.qualityReport?.coverageGaps||[];
   const selectedGapKeys=Form.useWatch('coverageGapKeys',form)||[];
-  const [expansionTargetConfig,setExpansionTargetConfig]=useState({});
-  const qualityExpansionTargets=effectiveQualityRules.filter(rule=>!rule.id.includes('COVERAGE')).map((rule,index)=>({key:`quality-${rule.id}`,kind:'低质数据',dimension:rule.category,label:rule.name,ruleId:rule.id,currentScore:Math.max(68,92-index*2),defaultTargetScore:rule.privacy?100:90}));
-  const expansionTargetRows=[...coverageGaps.map(item=>({...item,kind:'标签覆盖'})),...qualityExpansionTargets];
+  const [expansionTargetConfig,setExpansionTargetConfig]=useState(()=>draft.configSnapshot?.expansionTargetConfig||{});
+  const expansionSource=String(inputDatasetId)+'/'+inputVersionId+'/'+reportSelectionId;
+  const previousExpansionSource=useRef(expansionSource);
+  useEffect(()=>{if(previousExpansionSource.current!==expansionSource){form.setFieldValue('coverageGapKeys',[]);form.setFieldValue('labelTargetCount',null);setExpansionTargetConfig({});previousExpansionSource.current=expansionSource;}},[expansionSource,form]);
+  const qualityExpansionTargets=expansionTargets(selectedReport).filter(r=>r.kind==='规则不通过');
+  const expansionTargetRows=useMemo(()=>expansionTargets(selectedReport),[selectedReport]);
+  const [expansionTargetKind,setExpansionTargetKind]=useState('规则不通过'),[expansionEvidence,setExpansionEvidence]=useState(null);
+  const actualTargetKind=expansionTargetKind;
+  const visibleExpansionTargets=expansionTargetRows.filter(r=>r.kind===actualTargetKind);
   const targetConfigFor=row=>expansionTargetConfig[row.key]||{};
-  const suggestedGapFor=row=>row.kind==='标签覆盖'?Math.max(0,Number(targetConfigFor(row).target??row.target)-Number(row.pass||0)):Math.max(0,Math.ceil(selectedVersionSampleCount*Math.max(0,Number(targetConfigFor(row).targetScore??row.defaultTargetScore)-Number(row.currentScore||0))/100));
+  const suggestedGapFor=row=>expansionCount(row,targetConfigFor(row));
   const selectedGapTotal=expansionTargetRows.filter(item=>selectedGapKeys.includes(item.key)).reduce((sum,item)=>sum+suggestedGapFor(item),0);
   const customExpansionTotal=customExpansionEnabled?customExpansionSettings.reduce((sum,item)=>sum+Number(item?.count||0),0):0;
-  const expansionEstimate=Math.max(targetCount,selectedGapTotal+customExpansionTotal);
+  const expansionEstimate=selectedGapTotal+customExpansionTotal;
 
   useEffect(()=>{
     let active=true;
@@ -1232,7 +1309,10 @@ function CreateTaskPage({ draft, datasets, onCancel, onSubmit }) {
       try{
         const result=draft.modality==='对话文本'?await conversationApi.listTemplates():draft.modality==='时序数据'?await coldchainApi.listTemplates():null;
         if(!active||!result)return;
-        const items=(result.items||[]).filter(item=>item.status==='enabled').map(item=>normalizePublishedTemplate(item,draft.modality));
+        const preferred=draft.modality==='对话文本'?'CONVTPL-LOGISTICS-DEMO-V2':'COLDTPL-REEFER-MODEL-DEMO-V2';
+        const seed=(result.items||[]).find(item=>item.template_id===preferred);
+        const profile=templatesForModality(draft.modality)[0];
+        const items=seed?[{...normalizePublishedTemplate(seed,draft.modality),id:profile.id,name:profile.name}]:[];
         if(items.length)setPublishedTemplates(items);
       }catch(error){message.error(`已发布模板读取失败：${error.message}`);}
     };
@@ -1273,37 +1353,51 @@ function CreateTaskPage({ draft, datasets, onCancel, onSubmit }) {
     if(isExpansion&&draft.modality==='文档图像'&&!draft.configSnapshot)form.setFieldValue('expansionModel','Doubao-Seedream-4.0');
   },[draft.configSnapshot,draft.modality,form,isExpansion]);
 
+  const qualityNeeds=qualityModelNeeds(effectiveQualityRules);
+  const automaticQualityCard=!isQuality&&<Card className="task-step-card section-title" title={isSynthesis?'自动质检':'自动复检'} extra={<Form.Item name="autoQualityEnabled" valuePropName="checked" noStyle><Switch aria-label={isSynthesis?'开启自动质检':'开启自动复检'}/></Form.Item>}>
+    <Text type="secondary" className="form-help">开启后按模板规则检查本次输出，结果与报告保存在同一版本。</Text>
+    {automaticQuality&&<div className="quality-model-fields">
+      {qualityNeeds.semantic&&<ModelWithParameters form={form} modelName="qualityModel" models={['Qwen3-14B','DeepSeek-V3.1']} initialModel="Qwen3-14B" parameterSwitchName="qualityParametersEnabled" parameterName="qualityParameters" label="语义质检模型"/>}
+      {qualityNeeds.vlm&&<ModelWithParameters form={form} modelName="qualityVlmModel" models={['Qwen3-VL-8B-Instruct']} initialModel="Qwen3-VL-8B-Instruct" parameterSwitchName="qualityVlmParametersEnabled" parameterName="qualityVlmParameters" label="图像理解模型（VLM）"/>}
+      {qualityNeeds.embedding&&<ModelConfigField><Form.Item name="qualityEmbeddingModel" label="Embedding 模型" initialValue="bge-m3" rules={[{required:true}]}><Select placeholder="请选择Embedding 模型" options={[{value:'bge-m3',label:'bge-m3'}]}/></Form.Item></ModelConfigField>}
+      {!qualityNeeds.semantic&&!qualityNeeds.vlm&&!qualityNeeds.embedding&&<Text type="secondary">当前规则为函数检查，无需模型。</Text>}
+    </div>}
+  </Card>;
   const inputCard=!isSynthesis&&<Card className="task-step-card" title="选择输入数据版本">
-    <Alert type="info" showIcon message="请选择本次任务的输入数据集和确定版本" description={isQuality?'可选择已绑定模板的数据版本。':'仅可选择已完成有效全量质检、具备样本级标签的版本。'}/>
-    <Row gutter={16} className="section-title"><Col span={12}><Form.Item name="inputDatasetId" label="输入数据集" rules={[{required:true,message:'请选择输入数据集'}]}><Select showSearch optionFilterProp="label" options={datasetOptions}/></Form.Item></Col><Col span={12}><Form.Item name="inputVersionId" label="版本 ID" rules={[{required:true,message:'请选择版本 ID'}]}><Select showSearch optionFilterProp="label" options={versionOptions} disabled={!selectedDataset}/></Form.Item></Col></Row>
+    <Alert type="info" showIcon message="请选择本次任务的输入数据集和确定版本" description={isQuality?'可选择已绑定模板的数据版本。':'可选择已完成质检并具备样本级质检标签的版本，支持全量质检和部分抽检。'}/>
+    <Row gutter={16} className="section-title"><Col span={12}><Form.Item name="inputDatasetId" label="输入数据集" rules={[{required:true,message:'请选择输入数据集'}]}><Select placeholder="请选择输入数据集" showSearch optionFilterProp="label" options={datasetOptions}/></Form.Item></Col><Col span={12}><Form.Item name="inputVersionId" label="版本 ID" rules={[{required:true,message:'请选择版本 ID'}]}><Select placeholder="请选择版本 ID" showSearch optionFilterProp="label" options={versionOptions} disabled={!selectedDataset}/></Form.Item></Col></Row>
+    {(isAugmentation||isExpansion)&&<Form.Item name="qualityReportId" label="质检报告" rules={[{required:true,message:'请选择质检报告'}]}><Select placeholder="请选择质检报告" disabled={!rawSelectedVersion} options={availableReports.map((report,index)=>({value:report.reportId,label:`${report.reportId} · ${report.createdAt||'-'}${index===0?'（最新）':''}`}))} onChange={()=>form.setFieldsValue({coverageGapKeys:[]})}/></Form.Item>}
+    {selectedVersion&&(isQuality||selectedReport)&&<TaskBasisSummary quality={isQuality} report={selectedReport} template={selectedTemplate} rules={effectiveQualityRules} onOpen={openBasis}/>}
   </Card>;
 
   const synthesisFields=<>
     <Card className="task-step-card" title="已发布模板与生成设置">
-      <Form.Item name="templateId" label="已发布模板" rules={[{required:true,message:'请选择已发布模板'}]}><Select showSearch optionFilterProp="label" options={publishedTemplates.map(template=>({value:template.id,label:`${template.name} · ${template.businessType} · ${template.version}`}))}/></Form.Item>
+      <Form.Item name="templateId" label="已发布模板" rules={[{required:true,message:'请选择已发布模板'}]}><Select placeholder="请选择已发布模板" showSearch optionFilterProp="label" options={publishedTemplates.map(template=>({value:template.id,label:`${template.name} · ${template.businessType}`}))}/></Form.Item>
       <Divider orientation="left">本次批量生成设置</Divider>
-      <Row gutter={16}><Col span={8}><Form.Item name="sampleCount" label={`样本数量（${draft.modality==='文档图像'?'张':draft.modality==='时序数据'?'条':'条'}）`} rules={[{required:true}]}><InputNumber min={1} max={100000} style={{width:'100%'}}/></Form.Item></Col>{draft.modality==='文档图像'&&<><Col span={8}><Form.Item name="resolution" label="成品分辨率"><Select options={['2480 × 1754','3508 × 2480','自定义'].map(value=>({value,label:value}))}/></Form.Item></Col><Col span={8}><Form.Item name="patternRatio" label="图案 / 印章出现比例"><InputNumber min={0} max={100} addonAfter="%" style={{width:'100%'}}/></Form.Item></Col></>}{draft.modality==='对话文本'&&<><Col span={8}><Form.Item name="minTurns" label="最少对话轮数" rules={[{required:true}]}><InputNumber min={1} style={{width:'100%'}}/></Form.Item></Col><Col span={8}><Form.Item name="maxTurns" dependencies={['minTurns']} label="最多对话轮数" rules={[{required:true},{validator:(_,value)=>Number(value)>=Number(form.getFieldValue('minTurns'))?Promise.resolve():Promise.reject(new Error('不能小于最少对话轮数'))}]}><InputNumber min={1} style={{width:'100%'}}/></Form.Item></Col></>}{draft.modality==='时序数据'&&<><Col span={8}><Form.Item name="minTimeSteps" label="最少时序步数" rules={[{required:true}]}><InputNumber min={2} precision={0} style={{width:'100%'}}/></Form.Item></Col><Col span={8}><Form.Item name="maxTimeSteps" dependencies={['minTimeSteps']} label="最多时序步数" rules={[{required:true},{validator:(_,value)=>Number(value)>=Number(form.getFieldValue('minTimeSteps'))?Promise.resolve():Promise.reject(new Error('不能小于最少时序步数'))}]}><InputNumber min={2} precision={0} style={{width:'100%'}}/></Form.Item></Col><Col span={8}><Form.Item name="stepMinutes" label="采样间隔" rules={[{required:true}]}><Select options={[10,15,30,60].map(value=>({value,label:`每 ${value} 分钟`}))}/></Form.Item></Col></>}</Row>
+      <Row gutter={16}><Col span={8}><Form.Item name="sampleCount" label={`样本数量（${draft.modality==='文档图像'?'张':draft.modality==='时序数据'?'条':'条'}）`} rules={[{required:true}]}><InputNumber placeholder="请输入数值（1～100000）" min={1} max={100000} style={{width:'100%'}}/></Form.Item></Col>{draft.modality==='文档图像'&&<><Col span={8}><Form.Item name="resolution" label="成品分辨率"><Select placeholder="请选择成品分辨率" options={['2480 × 1754','3508 × 2480','自定义'].map(value=>({value,label:value}))}/></Form.Item></Col><Col span={8}><Form.Item name="patternRatio" label="图案 / 印章出现比例"><InputNumber placeholder="请输入图案 / 印章出现比例（0～100）" min={0} max={100} addonAfter="%" style={{width:'100%'}}/></Form.Item></Col></>}{draft.modality==='对话文本'&&<><Col span={8}><Form.Item name="minTurns" label="最少对话轮数" rules={[{required:true}]}><InputNumber placeholder="请输入最少对话轮数（不小于 1）" min={1} style={{width:'100%'}}/></Form.Item></Col><Col span={8}><Form.Item name="maxTurns" dependencies={['minTurns']} label="最多对话轮数" rules={[{required:true},{validator:(_,value)=>Number(value)>=Number(form.getFieldValue('minTurns'))?Promise.resolve():Promise.reject(new Error('不能小于最少对话轮数'))}]}><InputNumber placeholder="请输入最多对话轮数（不小于 1）" min={1} style={{width:'100%'}}/></Form.Item></Col></>}{draft.modality==='时序数据'&&<><Col span={8}><Form.Item name="minTimeSteps" label="最少时序步数" rules={[{required:true}]}><InputNumber placeholder="请输入最少时序步数（不小于 2）" min={2} precision={0} style={{width:'100%'}}/></Form.Item></Col><Col span={8}><Form.Item name="maxTimeSteps" dependencies={['minTimeSteps']} label="最多时序步数" rules={[{required:true},{validator:(_,value)=>Number(value)>=Number(form.getFieldValue('minTimeSteps'))?Promise.resolve():Promise.reject(new Error('不能小于最少时序步数'))}]}><InputNumber placeholder="请输入最多时序步数（不小于 2）" min={2} precision={0} style={{width:'100%'}}/></Form.Item></Col><Col span={8}><Form.Item name="stepMinutes" label="采样间隔" rules={[{required:true}]}><Select placeholder="请选择采样间隔" options={[10,15,30,60].map(value=>({value,label:`每 ${value} 分钟`}))}/></Form.Item></Col></>}</Row>
       {draft.modality==='时序数据'&&<><Descriptions bordered size="small" column={1} items={[{key:'method',label:'模板生成方式',children:<Tag color={generationMethod==='engine'?'cyan':'blue'}>{generationMethod==='engine'?'引擎生成':'模型生成'}</Tag>}]}/><Form.Item className="section-title" label="模板输出字段"><Input.TextArea autoSize={{minRows:2,maxRows:5}} value={(selectedTemplate?.configuration?.fields||[]).filter(item=>item.enabled!==false).map(item=>`${item.label||item.field_id}${item.unit?`（${item.unit}）`:''}`).join('、')||'-'} disabled/></Form.Item><DimensionRatioSamplingCard form={form} dimensions={timeseriesDimensions} sampleCount={sampleCount} title="事件采样比例" conditionColumnWidth={320}/></>}
       {draft.modality==='对话文本'&&<><Form.Item label="输出数据格式"><Input value={selectedTemplate?.outputFormat||'-'} disabled/></Form.Item><ConversationTaskSamplingCard form={form} sampler={conversationSampler} sampleCount={sampleCount}/></>}
       <ModelWithParameters form={form} label={draft.modality==='时序数据'?(generationMethod==='engine'?'阶段一事件生成模型':'两阶段生成模型'):'生成模型'}/>
-      {draft.modality==='文档图像'&&selectedTemplate?.method==='底图生成法'&&<><Divider orientation="left">底图生成配置</Divider><Flex justify="space-between" align="center" className="form-switch-line"><div><Text strong>任务级覆盖</Text><div><Text type="secondary">默认锁定模板中的图像模型和底图 Prompt；开启后仅覆盖本次任务。</Text></div></div><Form.Item name="overrideBackgroundGeneration" valuePropName="checked" noStyle><Switch/></Form.Item></Flex><Row gutter={16}><Col span={8}><Form.Item name="imageGenerationModel" label="图像生成模型"><Select disabled={!overrideBackgroundGeneration} options={['Doubao-Seedream-4.0','Qwen-Image'].map(value=>({value,label:value}))}/></Form.Item></Col><Col span={16}><Form.Item name="backgroundPrompt" label="底图生成 Prompt"><Input.TextArea rows={4} disabled={!overrideBackgroundGeneration}/></Form.Item></Col></Row></>}
+      {draft.modality==='文档图像'&&selectedTemplate?.method==='底图生成法'&&<><Divider orientation="left">底图生成配置</Divider><Flex justify="space-between" align="center" className="form-switch-line"><div><Text strong>任务级覆盖</Text><div><Text type="secondary">默认锁定模板中的图像模型和底图 Prompt；开启后仅覆盖本次任务。</Text></div></div><Form.Item name="overrideBackgroundGeneration" valuePropName="checked" noStyle><Switch/></Form.Item></Flex><Row gutter={16}><Col span={8}><ModelConfigField><Form.Item name="imageGenerationModel" label="图像生成模型"><Select placeholder="请选择图像生成模型" disabled={!overrideBackgroundGeneration} options={['Doubao-Seedream-4.0','Qwen-Image'].map(value=>({value,label:value}))}/></Form.Item></ModelConfigField></Col><Col span={16}><Form.Item name="backgroundPrompt" label="底图生成 Prompt"><Input.TextArea placeholder="描述底图生成 Prompt，说明目标、约束和输出要求" rows={4} disabled={!overrideBackgroundGeneration}/></Form.Item></Col></Row></>}
       <Divider orientation="left">配置来源</Divider><Alert type="info" showIcon message="业务类型、结构、字段和规则来自模板" description="本页只覆盖样本规模和运行参数；增强、质检与定向扩增已拆分为独立任务。"/>
-      <Divider orientation="left">API 调用次数预估</Divider><ApiEstimate items={[{label:draft.modality==='时序数据'&&generationMethod==='engine'?'阶段一事件生成模型':'生成模型',value:draft.modality==='对话文本'||(draft.modality==='时序数据'&&generationMethod==='model')?sampleCount*2:sampleCount},{label:'图像模型',value:draft.modality==='文档图像'&&selectedTemplate?.method==='底图生成法'?sampleCount:0}]}/>
+      <Divider orientation="left">API 调用次数预估</Divider><ApiEstimate items={[{label:draft.modality==='时序数据'&&generationMethod==='engine'?'阶段一事件生成模型':'生成模型',value:draft.modality==='对话文本'||(draft.modality==='时序数据'&&generationMethod==='model')?sampleCount*2:sampleCount},{label:'图像模型',value:draft.modality==='文档图像'&&selectedTemplate?.method==='底图生成法'?sampleCount:0},...(automaticQuality?[{label:'质检模型',value:sampleCount*semanticRuleCount}]:[])]}/>
     </Card>
     <Card className="task-step-card section-title" title="结果写入"><OutputConfig form={form} datasets={datasets.filter(dataset=>dataset.templateId===selectedTemplate?.id)} modality={draft.modality}/></Card>
   </>;
 
-  const qualityFields=<Card className="task-step-card section-title" title="质检运行设置">
+  const qualityFields=<><Card className="task-step-card section-title" title="质检运行设置">
     <Form.Item name="qualityScope" label="质检范围" rules={[{required:true}]}><Radio.Group optionType="button" buttonStyle="solid" options={[{value:'full',label:'全量质检'},{value:'sample',label:'部分抽检'}]}/></Form.Item>
-    {qualityScope==='sample'&&<Row gutter={16}><Col span={8}><Form.Item name="samplingRatio" label="抽检比例" rules={[{required:true,message:'请输入抽检比例'}]}><InputNumber min={1} max={100} precision={0} addonAfter="%" style={{width:'100%'}}/></Form.Item></Col><Col span={16}><div style={{paddingTop:28}}><Text strong>{`本次预计抽检 ${qualityCheckedSampleCount.toLocaleString()} 条`}</Text><div><Text type="secondary">{`输入版本共 ${selectedVersionSampleCount.toLocaleString()} 条，输出版本仍保留全部样本；其余 ${qualityUncheckedSampleCount.toLocaleString()} 条写入“未质检”标签。`}</Text></div></div></Col></Row>}
-    <Descriptions bordered size="small" column={3} items={[{key:'range',label:'质检执行范围',children:<Tag color={qualityScope==='full'?'blue':'orange'}>{qualityScope==='full'?'全部数据':`部分抽检 ${samplingRatio}%`}</Tag>},{key:'sample',label:'预计检查样本',children:qualityCheckedSampleCount.toLocaleString()},{key:'target',label:'目标数据集',children:selectedDataset?.name||'-'}]}/>
-    {draft.modality==='对话文本'&&<><Divider orientation="left">模板规则包与判定策略</Divider><Row gutter={[12,12]}>{[...new Set(effectiveQualityRules.map(rule=>rule.category))].map(category=><Col span={8} key={category}><Card size="small"><Flex justify="space-between"><Text strong>{category}</Text><Tag color={category==='隐私质检'?'purple':category==='基础统计'?'blue':category==='自定义质检'?'gold':'green'}>{effectiveQualityRules.filter(rule=>rule.category===category).length} 条</Tag></Flex></Card></Col>)}</Row><Alert className="section-title" type="info" showIcon message="按规则级别形成最终结论" description="BLOCK 失败或检测器执行错误 → REJECT；REVIEW 失败 → REVIEW；INFO 仅统计；其余 → PASS。不存在单一的全局 PASS 分数。"/></>}
-    {semanticRuleCount>0?<><Divider orientation="left">质检模型覆盖</Divider><ModelWithParameters form={form} modelName="qualityModel" parameterSwitchName="qualityParametersEnabled" parameterName="qualityParameters" label="质检模型"/></>:<Alert className="section-title" type="info" showIcon message="当前模板仅包含本地确定性规则，无需配置质检模型"/>}
-    {draft.modality==='对话文本'&&effectiveQualityRules.some(rule=>/Embedding/.test(`${rule.method||''}${rule.engine||''}`))&&<Form.Item name="qualityEmbeddingModel" initialValue="text-embedding-v3" label="Embedding 检测模型" rules={[{required:true,message:'请选择 Embedding 检测模型'}]}><Select options={[{value:'text-embedding-v3',label:'text-embedding-v3'}]}/></Form.Item>}
-    <Divider orientation="left">结果写入</Divider><Form.Item name="targetDataset" label="目标数据集"><Input disabled/></Form.Item><Form.Item name="versionNote" label="输出版本描述" rules={[{required:true}]}><Input/></Form.Item>
-    <Alert type="success" showIcon message="质检成功后只创建 1 个新版本" description={qualityScope==='full'?'新版本样本数与输入版本一致；全部样本写入质检结论和逐规则结果。':'新版本样本数与输入版本一致；抽中样本写入质检结论和逐规则结果，未抽中样本统一写入“未质检”标签。'}/>
-    <Divider orientation="left">API 调用次数预估</Divider><ApiEstimate items={[{label:'LLM / Embedding 质检',value:qualityCheckedSampleCount*semanticRuleCount},{label:'本地规则（批处理）',value:0}]}/>
-  </Card>;
+    {qualityScope==='sample'&&<Row gutter={16}><Col span={8}><Form.Item name="samplingRatio" label="抽检比例" rules={[{required:true,message:'请输入抽检比例'}]}><InputNumber placeholder="请输入抽检比例（1～100）" min={1} max={100} precision={0} addonAfter="%" style={{width:'100%'}}/></Form.Item></Col></Row>}
+    <Descriptions bordered size="small" column={3} items={[{key:'range',label:'质检执行范围',children:<Tag color={qualityScope==='full'?'blue':'orange'}>{qualityScope==='full'?'全部数据':`部分抽检 ${samplingRatio}%`}</Tag>},{key:'total',label:'全部样本',children:selectedVersionSampleCount.toLocaleString()},{key:'sample',label:'预计检查样本',children:qualityCheckedSampleCount.toLocaleString()}]}/>
+
+    {semanticRuleCount>0?<><Divider orientation="left">质检执行模型</Divider><ModelWithParameters form={form} modelName="qualityModel" parameterSwitchName="qualityParametersEnabled" parameterName="qualityParameters" label={draft.modality==='文档图像'?'语义质检模型':'质检模型'}/>{draft.modality==='文档图像'&&<div className="section-title"><ModelWithParameters form={form} modelName="qualityVlmModel" initialModel="Qwen3-VL-8B-Instruct" models={['Qwen3-VL-8B-Instruct']} parameterSwitchName="qualityVlmParametersEnabled" parameterName="qualityVlmParameters" label="VLM 图像质检模型"/></div>}</>:<Alert className="section-title" type="info" showIcon message="当前模板仅包含本地确定性规则，无需配置质检模型"/>}
+    {draft.modality==='对话文本'&&effectiveQualityRules.some(rule=>/Embedding/.test(`${rule.method||''}${rule.engine||''}${rule.mode||''}`))&&<ModelConfigField><Form.Item name="qualityEmbeddingModel" initialValue="text-embedding-v3" label="Embedding 检测模型" rules={[{required:true,message:'请选择 Embedding 检测模型'}]}><Select placeholder="请选择Embedding 检测模型" options={[{value:'text-embedding-v3',label:'text-embedding-v3'}]}/></Form.Item></ModelConfigField>}
+  </Card><Card className="task-step-card section-title" title="报告保存位置"><Descriptions bordered size="small" column={1} items={[
+      {key:'dataset',label:'数据集名称',children:selectedDataset?.name||'-'},
+      {key:'id',label:'数据集 ID',children:selectedDataset?.id||'-'},
+      {key:'version',label:'版本 ID',children:selectedVersion?.version||'-'},
+    ]}/><Text type="secondary">质检结果新增为独立文件，原始文件保持不变。</Text>
+  </Card></>;
 
   const conversationSemanticMethods=['表达同义改写','无关上下文注入','规则绕过对抗样本'];
   const timeseriesEventSemanticMethods=['计划性断网上报'];
@@ -1313,67 +1407,27 @@ function CreateTaskPage({ draft, datasets, onCancel, onSubmit }) {
     {id:'SEM-LONG-TEXT',name:'长文本字段语义改写',prompt:'对备注、商品描述等长文本字段进行语义等价改写，保持事实、数字、代码和字段含义一致。'},
     {id:'SEM-RARE-VALUE',name:'稀缺字段取值补充',prompt:'根据模板允许的枚举和字段依赖关系，生成低覆盖但合法的字段取值组合。'},
   ];
-  const documentImageMethods=['文档退化','旋转 / 透视 / 亮度变化','折痕','扫描 / 复印','污渍','标注同步'];
-  const documentBackgroundMethods=['桌面拍摄背景','文件夹衬底背景','扫描边缘背景'];
-  const documentAugmentationConfig=<>
-    <Divider orientation="left">增强类型</Divider>
-    <Descriptions bordered size="small" column={1} items={[{key:'privacy',label:<Space><Text>隐私增强</Text><Tag color="blue">必选</Tag></Space>,children:'系统固定执行隐私检查，并按照下方配置处理命中的敏感内容；该能力不能取消。'}]}/>
-    <Form.Item name="documentEnhancementTypes" initialValue={['图像增强']} label="其他增强类型（可多选）" className="section-title"><Checkbox.Group options={['语义增强','图像增强','背景增强']}/></Form.Item>
-    {documentEnhancementTypes.includes('语义增强')&&<Card size="small" title="语义增强" className="section-title"><Table size="small" rowKey="id" pagination={false} dataSource={documentSemanticPresetRules} rowSelection={{selectedRowKeys:Form.useWatch('documentSemanticRules',form)||[],onChange:keys=>form.setFieldValue('documentSemanticRules',keys)}} columns={[{title:'预置规则名称 / ID',width:230,render:(_,rule)=><div><Text strong>{rule.name}</Text><div className="muted-id">{rule.id}</div></div>},{title:'Prompt',dataIndex:'prompt'}]}/><Flex justify="space-between" align="center" className="form-switch-line section-title"><div><Text strong>自定义语义增强规则</Text><div><Text type="secondary">填写规则名称和 Prompt，不支持上传或执行用户代码</Text></div></div><Form.Item name="documentSemanticCustomEnabled" valuePropName="checked" noStyle><Switch/></Form.Item></Flex>{documentSemanticCustomEnabled&&<Row gutter={16}><Col span={8}><Form.Item name="documentSemanticCustomName" label="规则名称" rules={[{required:true}]}><Input/></Form.Item></Col><Col span={16}><Form.Item name="documentSemanticCustomPrompt" label="Prompt" rules={[{required:true}]}><Input.TextArea rows={4}/></Form.Item></Col></Row>}<Divider orientation="left">语义增强生成模型</Divider><ModelWithParameters form={form} modelName="semanticEnhancementModel" parameterSwitchName="semanticEnhancementParametersEnabled" parameterName="semanticEnhancementParameters" label="VLM 生成模型"/></Card>}
-    {documentEnhancementTypes.includes('图像增强')&&<Card size="small" title="图像增强" className="section-title"><Form.Item name="documentImageMethods" initialValue={['文档退化','旋转 / 透视 / 亮度变化','标注同步']} label="预置图像增强方式" rules={[{required:true,message:'请选择至少一种图像增强方式'}]}><Checkbox.Group options={documentImageMethods}/></Form.Item><Text type="secondary">图像增强仅支持系统预置方式，不提供自定义规则。</Text></Card>}
-    {documentEnhancementTypes.includes('背景增强')&&<Card size="small" title="背景增强" className="section-title"><Form.Item name="documentBackgroundMethods" label="预置背景增强方式" rules={[{required:true,message:'请选择至少一种背景增强方式'}]}><Checkbox.Group options={documentBackgroundMethods}/></Form.Item><Flex justify="space-between" align="center" className="form-switch-line"><div><Text strong>自定义背景增强规则</Text><div><Text type="secondary">填写规则名称和 Prompt</Text></div></div><Form.Item name="documentBackgroundCustomEnabled" valuePropName="checked" noStyle><Switch/></Form.Item></Flex>{documentBackgroundCustomEnabled&&<Row gutter={16}><Col span={8}><Form.Item name="documentBackgroundCustomName" label="规则名称" rules={[{required:true}]}><Input/></Form.Item></Col><Col span={16}><Form.Item name="documentBackgroundCustomPrompt" label="Prompt" rules={[{required:true}]}><Input.TextArea rows={4}/></Form.Item></Col></Row>}<Divider orientation="left">背景生成模型</Divider><Form.Item name="backgroundEnhancementModel" label="图像生成模型" rules={[{required:true,message:'请选择图像生成模型'}]}><Select options={['Doubao-Seedream-4.0','Qwen-Image'].map(value=>({value,label:value}))}/></Form.Item></Card>}
-  </>;
-  const conversationAugmentationConfig=<>
-    <Divider orientation="left">语义增强</Divider>
-    <Form.Item name="conversationSemanticMethods" initialValue={['表达同义改写']} label="预置语义增强规则"><Checkbox.Group options={conversationSemanticMethods}/></Form.Item>
-    <Flex justify="space-between" align="center" className="form-switch-line"><div><Text strong>自定义语义增强规则</Text><div><Text type="secondary">填写规则名称和增强 Prompt，可与预置规则组合执行</Text></div></div><Form.Item name="customEnhancementEnabled" valuePropName="checked" noStyle><Switch/></Form.Item></Flex>
-    {customEnhancementEnabled&&<Row gutter={16}><Col span={8}><Form.Item name="customEnhancementName" label="规则名称" rules={[{required:true,message:'请输入规则名称'}]}><Input/></Form.Item></Col><Col span={16}><Form.Item name="customEnhancementPrompt" label="增强 Prompt" rules={[{required:true,message:'请输入增强 Prompt'}]}><Input.TextArea rows={4}/></Form.Item></Col></Row>}
-    <Divider orientation="left">隐私增强</Divider>
-    <Descriptions bordered size="small" column={1} items={[{key:'privacy',label:<Space><Text>隐私增强</Text><Tag color="blue">必选</Tag></Space>,children:'系统固定检查并处理质检报告命中的隐私内容，该增强类型不可取消。'}]}/>
-    <Form.Item name="conversationPrivacyMethod" initialValue="部分掩码" label="脱敏方式" className="section-title" rules={[{required:true,message:'请选择脱敏方式'}]}><Select options={['部分掩码','全掩码','删除','泛化','随机替换','虚构替换'].map(value=>({value,label:value}))}/></Form.Item>
-    <Alert type={privacyHits>0?'warning':'info'} showIcon message={privacyHits>0?`质检报告发现 ${privacyHits} 条隐私命中`:'质检报告暂未发现隐私命中'} description="增强任务仍会执行隐私检查；发现敏感内容时统一采用所选脱敏方式，并在增强后复检。"/>
-  </>;
-  const timeseriesAugmentationConfig=<>
-    <Divider orientation="left">事件语义增强</Divider>
-    <Form.Item name="timeseriesEventMethods" initialValue={['计划性断网上报']} label="预置事件语义增强规则"><Checkbox.Group options={timeseriesEventSemanticMethods}/></Form.Item>
-    <Flex justify="space-between" align="center" className="form-switch-line"><div><Text strong>自定义事件语义增强规则</Text><div><Text type="secondary">填写规则名称和 Prompt，用于调整或生成时序事件内容</Text></div></div><Form.Item name="timeseriesEventCustomEnabled" valuePropName="checked" noStyle><Switch/></Form.Item></Flex>
-    {timeseriesEventCustomEnabled&&<Row gutter={16}><Col span={8}><Form.Item name="timeseriesEventCustomName" label="规则名称" rules={[{required:true,message:'请输入规则名称'}]}><Input/></Form.Item></Col><Col span={16}><Form.Item name="timeseriesEventCustomPrompt" label="增强 Prompt" rules={[{required:true,message:'请输入增强 Prompt'}]}><Input.TextArea rows={4}/></Form.Item></Col></Row>}
-    <Divider orientation="left">输出参数增强</Divider>
-    <Form.Item name="timeseriesParameterMethods" initialValue={['传感器轻微抖动','时间平移']} label="预置输出参数增强规则"><Checkbox.Group options={timeseriesParameterMethods}/></Form.Item>
-    <Flex justify="space-between" align="center" className="form-switch-line"><div><Text strong>自定义输出参数增强规则</Text><div><Text type="secondary">填写规则名称和 Prompt，用于调整模板定义的时序输出参数</Text></div></div><Form.Item name="timeseriesParameterCustomEnabled" valuePropName="checked" noStyle><Switch/></Form.Item></Flex>
-    {timeseriesParameterCustomEnabled&&<Row gutter={16}><Col span={8}><Form.Item name="timeseriesParameterCustomName" label="规则名称" rules={[{required:true,message:'请输入规则名称'}]}><Input/></Form.Item></Col><Col span={16}><Form.Item name="timeseriesParameterCustomPrompt" label="增强 Prompt" rules={[{required:true,message:'请输入增强 Prompt'}]}><Input.TextArea rows={4}/></Form.Item></Col></Row>}
-    <Divider orientation="left">隐私增强</Divider>
-    <Descriptions bordered size="small" column={1} items={[{key:'privacy',label:<Space><Text>隐私增强</Text><Tag color="blue">必选</Tag></Space>,children:'系统固定检查设备标识、车辆标识、人员信息、路线业务编号和事件文本中的敏感信息，该增强类型不可取消。'}]}/>
-    <Form.Item name="timeseriesPrivacyMethod" initialValue="虚构替换" label="脱敏方式" className="section-title" rules={[{required:true,message:'请选择脱敏方式'}]}><Select options={['部分掩码','全掩码','删除','泛化','随机替换','虚构替换'].map(value=>({value,label:value}))}/></Form.Item>
-    <Alert type={privacyHits>0?'warning':'info'} showIcon message={privacyHits>0?`质检报告发现 ${privacyHits} 条隐私命中`:'质检报告暂未发现隐私命中'} description="增强任务仍会执行隐私检查；命中后采用所选方式处理，并校验同一序列内标识的一致性。"/>
-  </>;
-  const augmentationFields=<Card className="task-step-card section-title" title="数据增强设置">
-    {selectedVersion&&<><Title level={5}>依据质检结果</Title><QualityStatusSummary counts={statusCounts} total={numericSampleCount(selectedVersion.samples)}/></>}
-    <Divider orientation="left">增强样本选择</Divider><Form.Item name="sampleSelection"><Radio.Group optionType="button" buttonStyle="solid" options={[{value:'pass',label:'全部 PASS 样本'},{value:'threshold',label:'自定义选样阈值'}]}/></Form.Item>{sampleSelection==='threshold'&&<Form.Item name="selectionThreshold" label="增强选样阈值"><Slider min={0} max={100} marks={{0:'0',75:'75',100:'100'}}/></Form.Item>}<Alert type="info" showIcon message={`预计可选 ${selectableCount.toLocaleString()} 条样本`} description="该阈值只控制本次增强选样，不会修改模板 PASS 门槛和已有质检结论。"/>
+  const documentImageMethods=['文档退化','旋转 / 透视 / 亮度变化','折痕','扫描 / 复印','污渍'];
+  const documentAugmentationConfig=<DocumentAugmentationScheme form={form} presets={documentSemanticPresetRules}/>;
+  const conversationAugmentationConfig=<TextAugmentationScheme form={form} groups={[{title:'语义增强',field:'conversationSemanticMethods',custom:'conversationSemanticCustomRules',legacy:'customEnhancement',options:conversationSemanticMethods,defaults:['表达同义改写']}]}/>;
+  const timeseriesAugmentationConfig=<TextAugmentationScheme form={form} groups={[{title:'事件语义增强',field:'timeseriesEventMethods',custom:'timeseriesEventCustomRules',legacy:'timeseriesEventCustom',options:timeseriesEventSemanticMethods,defaults:['计划性断网上报']},{title:'输出参数增强',field:'timeseriesParameterMethods',custom:'timeseriesParameterCustomRules',legacy:'timeseriesParameterCustom',options:timeseriesParameterMethods,defaults:['传感器轻微抖动','时间平移']}]}/>;
+  const augmentationFields=<>
+    <AugmentationSelection includeUnchecked={includeUnchecked} onIncludeUnchecked={setIncludeUnchecked} form={isAugmentation?form:undefined} limit={targetCount} report={selectedReport} total={selectedVersionSampleCount} pool={augmentationCandidates} mode={augmentationMode} threshold={augmentationThreshold} onChange={(mode,value)=>{setAugmentationMode(mode);setAugmentationThreshold(value);}}/>
+    <Card className="task-step-card section-title" title="配置增强方案">
     {draft.modality==='文档图像'?documentAugmentationConfig:draft.modality==='对话文本'?conversationAugmentationConfig:timeseriesAugmentationConfig}
-    <Row gutter={16}><Col span={12}><Form.Item name="targetCount" label="目标新增数量"><InputNumber min={1} max={selectableCount||100000} style={{width:'100%'}}/></Form.Item></Col><Col span={12}><Form.Item name="enhancementIntensity" label="增强强度"><Select options={['轻度','中等','重度'].map(value=>({value,label:value}))}/></Form.Item></Col></Row>
-    {draft.modality==='文档图像'&&<><Divider orientation="left">隐私增强配置</Divider><Alert type={privacyHits>0?'warning':'info'} showIcon message={privacyHits>0?`质检报告发现 ${privacyHits} 条隐私命中`:'质检报告暂未发现隐私命中'} description="隐私增强为固定必选项；系统仍会执行隐私检查，命中后按配置处理，并在增强完成后复检。"/>{privacyHits>0&&<Table size="small" pagination={false} rowKey="type" dataSource={[{type:'姓名与联系方式',count:Math.max(1,Math.round(privacyHits*.5)),location:'字段值 / 对话正文',defaultMethod:'部分掩码'},{type:'地址与业务编号',count:Math.max(1,privacyHits-Math.max(1,Math.round(privacyHits*.5))),location:'地址、订单号及单证编号',defaultMethod:'虚构替换'}]} columns={[{title:'敏感信息类型',dataIndex:'type'},{title:'命中数',dataIndex:'count'},{title:'样例定位',dataIndex:'location'},{title:'脱敏方式',render:(_,item)=><Form.Item name={['privacyMethods',item.type]} initialValue={item.defaultMethod} noStyle rules={[{required:true}]}><Select style={{width:150}} options={['部分掩码','全掩码','删除','泛化','随机替换','虚构替换'].map(value=>({value,label:value}))}/></Form.Item>}]}/>}</>}
-    {draft.modality!=='文档图像'&&<><Divider orientation="left">增强模型</Divider><ModelWithParameters form={form} modelName="enhancementModel" parameterSwitchName="enhancementParametersEnabled" parameterName="enhancementParameters" label="增强模型"/></>}
-    <Divider orientation="left">结果写入与自动复检</Divider><Form.Item name="targetDataset" label="目标数据集"><Input disabled/></Form.Item><Form.Item name="versionNote" label="增强版本描述" rules={[{required:true}]}><Input/></Form.Item><Alert type="success" showIcon message="增强和自动复检完成后只创建 1 个增强版本" description="增强数据、样本级复检标签和复检报告写入同一个版本；工作区中间产物不计入版本数。"/>
-    <Divider orientation="left">API 调用次数预估</Divider><ApiEstimate items={draft.modality==='文档图像'?[{label:'语义增强 VLM',value:documentEnhancementTypes.includes('语义增强')?targetCount:0},{label:'背景图像模型',value:documentEnhancementTypes.includes('背景增强')?targetCount:0},{label:'语义复检',value:targetCount*semanticRuleCount}]:[{label:'增强模型',value:targetCount},{label:'语义复检',value:targetCount*semanticRuleCount}]}/>
-  </Card>;
+  </Card><Card className="task-step-card section-title" title="结果写入"><Form.Item name="targetDataset" label="目标数据集"><Input disabled/></Form.Item><Form.Item name="versionNote" label="增强版本描述" rules={[{required:true}]}><Input placeholder="请输入增强版本描述"/></Form.Item><Alert type="success" showIcon message="任务完成后创建 1 个增强版本"/>
+  </Card></>;
 
   const expansionFields=<Card className="task-step-card section-title" title="定向扩增设置">
-    <Alert type="info" showIcon message="扩增目标来自输入版本的正式质检报告" description="既可以补齐标签覆盖缺口，也可以针对低分质检项生成替代或补充样本；目标值允许按本次任务调整。"/>
+    <Alert type="info" showIcon message="扩增目标来自输入版本的正式质检报告" description="可针对某条规则不通过的样本生成补充数据，或按标签分布补齐数量。无法判定不是低质量，不作为自动扩增依据。"/>
     <Form.Item name="coverageGapKeys" hidden><Input/></Form.Item>
-    <Table className="section-title" rowKey="key" size="small" pagination={false} dataSource={expansionTargetRows} columns={[
-      {title:<Checkbox checked={selectedGapKeys.length===expansionTargetRows.length&&expansionTargetRows.length>0} indeterminate={selectedGapKeys.length>0&&selectedGapKeys.length<expansionTargetRows.length} onChange={event=>form.setFieldValue('coverageGapKeys',event.target.checked?expansionTargetRows.map(row=>row.key):[])} />,width:48,render:(_,row)=><Checkbox checked={selectedGapKeys.includes(row.key)} onChange={event=>form.setFieldValue('coverageGapKeys',event.target.checked?[...new Set([...selectedGapKeys,row.key])]:selectedGapKeys.filter(key=>key!==row.key))}/>},
-      {title:'扩增目标类型',dataIndex:'kind',width:110,render:value=><Tag color={value==='标签覆盖'?'blue':'orange'}>{value}</Tag>},
-      {title:'目标项目',width:230,render:(_,row)=><div><Text strong>{row.label}</Text><div className="muted-id">{row.kind==='标签覆盖'?row.dimension:row.ruleId}</div></div>},
-      {title:'当前值',width:130,render:(_,row)=>row.kind==='标签覆盖'?`${Number(row.pass||0).toLocaleString()} 条`:`${row.currentScore} 分`},
-      {title:'扩增目标（可编辑）',width:190,render:(_,row)=>row.kind==='标签覆盖'?<InputNumber min={Number(row.pass||0)} max={100000} value={targetConfigFor(row).target??row.target} addonAfter="条" onChange={value=>setExpansionTargetConfig(config=>({...config,[row.key]:{...config[row.key],target:value}}))}/>:<InputNumber min={0} max={100} value={targetConfigFor(row).targetScore??row.defaultTargetScore} addonAfter="分" onChange={value=>setExpansionTargetConfig(config=>({...config,[row.key]:{...config[row.key],targetScore:value}}))}/>},
-      {title:'建议扩增数',width:140,render:(_,row)=><Text strong>{suggestedGapFor(row).toLocaleString()} 条</Text>},
-    ]}/>
-    <Row gutter={16} className="section-title"><Col span={12}><Form.Item name="targetCount" label="最大新增样本数" rules={[{required:true}]}><InputNumber min={Math.max(1,selectedGapTotal)} max={100000} style={{width:'100%'}}/></Form.Item></Col><Col span={12}><Form.Item label="已选目标建议合计"><Input value={`${selectedGapTotal.toLocaleString()} 条`} disabled/></Form.Item></Col></Row>
-    <Flex justify="space-between" align="center" className="form-switch-line"><div><Text strong>自定义扩增设置</Text><div><Text type="secondary">可添加多组目标标签或低质项、数量、指令和独立模型配置</Text></div></div><Form.Item name="customExpansionEnabled" valuePropName="checked" noStyle><Switch/></Form.Item></Flex>{customExpansionEnabled&&<Form.List name="customExpansionSettings">{(fields,{add,remove})=><Space direction="vertical" size={12} style={{width:'100%'}}>{fields.map((field,index)=><Card key={field.key} size="small" title={`自定义设置 ${index+1}`} extra={<Button type="text" danger icon={<DeleteOutlined/>} onClick={()=>remove(field.name)}>删除</Button>}><Row gutter={16}><Col span={6}><Form.Item name={[field.name,'name']} label="设置名称" rules={[{required:true}]}><Input/></Form.Item></Col><Col span={8}><Form.Item name={[field.name,'labels']} label="扩增目标组合" rules={[{required:true}]}><Select mode="multiple" options={expansionTargetRows.map(item=>({value:item.label,label:`${item.kind} · ${item.label}`}))}/></Form.Item></Col><Col span={4}><Form.Item name={[field.name,'count']} label="目标数量" rules={[{required:true}]}><InputNumber min={1} style={{width:'100%'}}/></Form.Item></Col><Col span={6}><Form.Item name={[field.name,'model']} label={draft.modality==='文档图像'?'图像生成模型':'生成模型'} rules={[{required:true}]}><Select options={['Qwen3-14B','Qwen3-VL-8B-Instruct','Doubao-Seedream-4.0','DeepSeek-V3.1'].map(value=>({value,label:value}))}/></Form.Item></Col></Row><Form.Item name={[field.name,'prompt']} label="扩增指令" rules={[{required:true}]}><Input.TextArea rows={3}/></Form.Item><Form.Item name={[field.name,'parameters']} label="生成参数 JSON（可选）" rules={[{validator:(_,value)=>{if(!value)return Promise.resolve();try{JSON.parse(value);return Promise.resolve();}catch{return Promise.reject(new Error('请输入合法 JSON'));}}}]}><Input.TextArea rows={3} className="json-textarea" placeholder={'{\n  "temperature": 0.8\n}'}/></Form.Item></Card>)}<Button type="dashed" block icon={<PlusOutlined/>} onClick={()=>add({model:draft.modality==='文档图像'?'Doubao-Seedream-4.0':'Qwen3-14B',parameters:'{\n  "temperature": 0.8\n}'})}>新增自定义扩增设置</Button></Space>}</Form.List>}
-    <Divider orientation="left">{draft.modality==='文档图像'?'图像生成模型':'生成模型'}</Divider><ModelWithParameters form={form} modelName="expansionModel" parameterSwitchName="expansionParametersEnabled" parameterName="expansionParameters" label={draft.modality==='文档图像'?'图像生成模型':'生成模型'}/>
-    <Divider orientation="left">结果写入与自动复检</Divider><Form.Item name="targetDataset" label="目标数据集"><Input disabled/></Form.Item><Form.Item name="versionNote" label="扩增版本描述" rules={[{required:true}]}><Input/></Form.Item><Alert type="success" showIcon message="扩增和自动复检完成后只创建 1 个扩增版本" description="扩增数据、样本级复检标签和复检报告写入同一个版本；不会额外创建复检版本。"/>
-    <Divider orientation="left">API 调用次数预估</Divider><ApiEstimate items={[{label:draft.modality==='文档图像'?'图像生成模型':'生成模型',value:expansionEstimate},{label:'语义复检',value:expansionEstimate*semanticRuleCount}]}/>
+    <Radio.Group aria-label="扩增目标来源" value={actualTargetKind} onChange={e=>setExpansionTargetKind(e.target.value)} options={[{value:"规则不通过",label:"规则不通过"},{value:"标签覆盖",label:"标签分布不足"}]} optionType="button"/>
+    <ExpansionEvidence report={selectedReport} target={expansionEvidence} onClose={()=>setExpansionEvidence(null)}/>
+    <ExpansionTargetTable rows={visibleExpansionTargets} selected={selectedGapKeys} onSelect={keys=>form.setFieldValue("coverageGapKeys",keys)} config={expansionTargetConfig} onConfig={setExpansionTargetConfig} onEvidence={setExpansionEvidence} report={selectedReport}/>
+    <div className="expansion-total"><Text type="secondary">计划新增合计</Text><Text strong>{expansionEstimate.toLocaleString()} 条</Text><Text type="secondary">按已选目标与自定义配置数量相加，各目标分别生成。</Text></div>
+    <Flex justify="space-between" align="center" className="form-switch-line"><div><Text strong>自定义扩增设置</Text><div><Text type="secondary">可添加多组目标标签或低质项、数量、指令和独立模型配置</Text></div></div><Form.Item name="customExpansionEnabled" valuePropName="checked" noStyle><Switch/></Form.Item></Flex>{customExpansionEnabled&&<Form.List name="customExpansionSettings">{(fields,{add,remove})=><Space direction="vertical" size={12} style={{width:'100%'}}>{fields.map((field,index)=><Card key={field.key} size="small" title={`自定义设置 ${index+1}`} extra={<Button type="text" danger icon={<DeleteOutlined/>} onClick={()=>remove(field.name)}>删除</Button>}><Row gutter={16}><Col span={6}><Form.Item name={[field.name,'name']} label="设置名称" rules={[{required:true}]}><Input placeholder="请输入设置名称"/></Form.Item></Col><Col span={8}><Form.Item name={[field.name,'labels']} label="扩增目标组合" rules={[{required:true}]}><Select placeholder="请选择扩增目标组合" mode="multiple" options={expansionTargetRows.map(item=>({value:item.key,label:`${item.kind} · ${item.dimension} · ${item.label}`}))}/></Form.Item></Col><Col span={4}><Form.Item name={[field.name,'count']} label="目标数量" rules={[{required:true}]}><InputNumber placeholder="请输入目标数量（不小于 1）" min={1} style={{width:'100%'}}/></Form.Item></Col></Row><Form.Item name={[field.name,'prompt']} label="扩增指令" rules={[{required:true}]}><Input.TextArea placeholder="描述扩增指令，说明目标、约束和输出要求" rows={3}/></Form.Item><ModelConfigField model={<Form.Item name={[field.name,'model']} label={draft.modality==='文档图像'?'图像生成模型':'生成模型'} rules={[{required:true},{validator:(_,value)=>expansionModels(draft.modality).includes(value)?Promise.resolve():Promise.reject(new Error('请选择适用于当前数据类型的生成模型'))}]}><Select placeholder="请选择选项" options={expansionModels(draft.modality).map(value=>({value,label:value}))}/></Form.Item>} parameters={<Form.Item name={[field.name,'parameters']}  rules={[{validator:(_,value)=>{if(!value)return Promise.resolve();try{JSON.parse(value);return Promise.resolve();}catch{return Promise.reject(new Error('请输入合法 JSON'));}}}]}><Input.TextArea rows={3} className="json-textarea" placeholder={'{\n  "temperature": 0.8\n}'}/></Form.Item>}/></Card>)}<Button type="dashed" block icon={<PlusOutlined/>} onClick={()=>add({model:defaultExpansionModel(draft.modality),parameters:'{\n  "temperature": 0.8\n}'})}>新增自定义扩增设置</Button></Space>}</Form.List>}
+    <ModelWithParameters form={form} modelName="expansionModel" parameterSwitchName="expansionParametersEnabled" parameterName="expansionParameters" models={expansionModels(draft.modality)} label={draft.modality==='文档图像'?'图像生成模型':'生成模型'}/>
+    <Divider orientation="left">结果写入</Divider><Form.Item name="targetDataset" label="目标数据集"><Input disabled/></Form.Item><Form.Item name="versionNote" label="扩增版本描述" rules={[{required:true}]}><Input placeholder="请输入扩增版本描述"/></Form.Item><Alert type="success" showIcon message="任务完成后创建 1 个扩增版本" description="开启自动复检时，标签与报告写入同一版本。"/>
   </Card>;
 
   const submit=async()=>{
@@ -1381,6 +1435,12 @@ function CreateTaskPage({ draft, datasets, onCancel, onSubmit }) {
     try{
       const values=await form.validateFields();
       if(!isSynthesis&&!selectedVersion)throw new Error('请选择有效的输入数据集版本');
+      if(isQuality&&!effectiveQualityRules.length)throw new Error('模板尚未配置质检规则，请先完善模板');
+      if(isAugmentation&&!selectableCount)throw new Error('没有符合条件的基础样本，请调整分数阈值或重新质检');
+      if(isAugmentation&&(!Number.isInteger(values.targetCount)||values.targetCount<1))throw new Error('目标增强样本数必须为正整数');
+      if(isExpansion&&(!expansionModels(draft.modality).includes(values.expansionModel)||(values.customExpansionEnabled&&(values.customExpansionSettings||[]).some(item=>!expansionModels(draft.modality).includes(item.model)))))throw new Error('请选择适用于当前数据类型的生成模型');
+      if(isExpansion&&!selectedGapKeys.length&&!customExpansionTotal)throw new Error('请选择至少一项扩增目标或填写自定义目标');
+      if(isExpansion){validateExpansionPlan(expansionTargetRows,selectedGapKeys,expansionTargetConfig,customExpansionEnabled?customExpansionSettings:[]);values.expansionTargets=expansionTargetRows.filter(r=>selectedGapKeys.includes(r.key)).map(r=>({...r,plannedCount:suggestedGapFor(r),plannedPercent:r.baseCount?(targetConfigFor(r).percent??suggestedGapFor(r)/r.baseCount*100):null,percentageBase:r.baseCount,quantityScope:'checked'}));}
       if(isSynthesis&&draft.modality==='对话文本'){
         if(conversationSampler.dimensions?.length){
           if(conversationSampler.dimensions.some(item=>!item?.name?.trim()||!(item.values||[]).length))throw new Error('模板中的事件采样维度配置不完整');
@@ -1409,27 +1469,38 @@ function CreateTaskPage({ draft, datasets, onCancel, onSubmit }) {
           if(total!==100)throw new Error(`采样维度“${dimension.name}”的枚举值占比合计必须等于 100%`);
         }
       }
-      if(isAugmentation&&draft.modality==='文档图像'&&values.documentEnhancementTypes?.includes('语义增强')&&!values.documentSemanticRules?.length&&!values.documentSemanticCustomEnabled)throw new Error('语义增强至少选择一条预置规则或配置一条自定义规则');
-      if(isAugmentation&&draft.modality==='文档图像'&&values.documentEnhancementTypes?.includes('背景增强')&&!values.documentBackgroundMethods?.length&&!values.documentBackgroundCustomEnabled)throw new Error('背景增强至少选择一种预置方式或配置一条自定义规则');
-      if(isAugmentation&&draft.modality==='对话文本'&&!values.conversationSemanticMethods?.length&&!values.customEnhancementEnabled)throw new Error('请选择至少一条预置语义增强规则，或添加一条自定义语义增强规则');
-      if(isAugmentation&&draft.modality==='时序数据'&&!values.timeseriesEventMethods?.length&&!values.timeseriesParameterMethods?.length&&!values.timeseriesEventCustomEnabled&&!values.timeseriesParameterCustomEnabled)throw new Error('请至少选择或添加一条事件语义增强或输出参数增强规则');
+      if(isAugmentation&&draft.modality==='文档图像'&&values.documentEnhancementTypes?.includes('语义增强')&&!values.documentSemanticRules?.length&&!values.documentSemanticCustomRules?.length)throw new Error('语义增强至少选择一条预置规则或配置一条自定义规则');
+      if(isAugmentation&&draft.modality==='文档图像'&&!values.documentEnhancementTypes?.length)throw new Error('请至少选择一种增强方式或添加自定义规则');
+      if(isAugmentation&&draft.modality==='对话文本'&&!values.conversationSemanticMethods?.length&&!values.conversationSemanticCustomRules?.length)throw new Error('请选择至少一条预置语义增强规则，或添加一条自定义语义增强规则');
+      if(isAugmentation&&draft.modality==='时序数据'&&!values.timeseriesEventMethods?.length&&!values.timeseriesParameterMethods?.length&&!values.timeseriesEventCustomRules?.length&&!values.timeseriesParameterCustomRules?.length)throw new Error('请至少选择或添加一条事件语义增强或输出参数增强规则');
       if(isExpansion&&!selectedGapKeys.length&&!values.customExpansionEnabled)throw new Error('请选择至少一个系统建议项，或开启自定义扩增设置');
-      if(isExpansion&&targetCount<selectedGapTotal+customExpansionTotal)throw new Error('最大新增样本数不能小于系统建议与自定义设置的目标数量合计');
+      if(isExpansion&&(!Number.isInteger(expansionEstimate)||expansionEstimate<1))throw new Error('请为扩增目标配置正整数数量');
       const template=isSynthesis?publishedTemplates.find(item=>item.id===values.templateId):selectedTemplate;
-      const output=isSynthesis?values.outputMode==='newVersion'?`${values.targetDataset} / 新版本`:values.outputDatasetName:`${selectedDataset.name} / 新版本`;
-      const input=isSynthesis?`${template.name} / ${template.version}`:`${selectedDataset.name} / ${selectedVersion.version}`;
+      const output=isSynthesis?values.outputMode==='newVersion'?`${values.targetDataset} / 新版本`:values.outputDatasetName:`${selectedDataset.name} / ${isQuality?selectedVersion.version:'新版本'}`;
+      const input=isSynthesis?template.name:`${selectedDataset.name} / ${selectedVersion.version}`;
       const dimensionSamplingSnapshot=isSynthesis&&['对话文本','时序数据'].includes(draft.modality)?{mode:'ratio_mix',sampleCount:Number(values.sampleCount||0),dimensions:(draft.modality==='对话文本'?(conversationSampler.dimensions||[]):timeseriesDimensions).map(dimension=>({dimension_id:dimension.dimension_id,dimension_name:dimension.name,applicability_conditions:dimension.applicability_conditions||'',prohibited_conditions:dimension.prohibited_conditions||'',options:(dimension.values||[]).map(optionName=>({option_id:dimension.option_ids?.[optionName]||optionName,option_name:optionName,target_ratio:Number((values.dimensionSamplingRatios||[]).find(item=>item.dimensionId===dimension.dimension_id&&item.optionId===(dimension.option_ids?.[optionName]||optionName))?.targetRatio||0)}))}))}:null;
-      onSubmit({...draft,...values,...(isSynthesis&&draft.modality==='对话文本'?{samplingPlanSnapshot:conversationSampler.dimensions?.length?dimensionSamplingSnapshot:conversationSamplingState.rows.filter(row=>(values.samplingAllocations||[]).find(item=>item.scenarioId===row.id)?.selected!==false).map(row=>({scenarioId:row.id,scenarioName:row.name,plannedCount:row.quota,ratio:row.ratio,branchPlan:(row.profiles||[]).map(profile=>({profileId:profile.id,profileName:profile.name,plannedCount:profile.quota,ratio:profile.ratio}))}))}:{}),...(isSynthesis&&draft.modality==='时序数据'?{samplingPlanSnapshot:dimensionSamplingSnapshot,runtimeSnapshot:{point_count_range:[Number(values.minTimeSteps),Number(values.maxTimeSteps)],step_minutes:Number(values.stepMinutes),timezone:'Asia/Shanghai',start_time_policy:'per_sample_generated',seed_policy:'system_generated'}}:{}),expansionTargetConfig,effectiveTargetCount:isExpansion?expansionEstimate:targetCount,qualityCheckedSampleCount:isQuality?qualityCheckedSampleCount:undefined,qualityUncheckedSampleCount:isQuality?qualityUncheckedSampleCount:undefined,businessType:template.businessType,stages:[draft.taskType],input,output,templateProfile:template,qualityRules:effectiveQualityRules,inputDatasetId:selectedDataset?.id,inputVersionId:selectedVersion?.version,sourceVersion:selectedVersion});
-    }catch(error){if(!error?.errorFields)message.error(error.message||'任务提交失败');else message.warning('请完成必填配置');}finally{setSubmitting(false);}
+      onSubmit({...draft,...values,...(isExpansion?{targetCount:expansionEstimate}:{}),...(isSynthesis&&draft.modality==='对话文本'?{samplingPlanSnapshot:conversationSampler.dimensions?.length?dimensionSamplingSnapshot:conversationSamplingState.rows.filter(row=>(values.samplingAllocations||[]).find(item=>item.scenarioId===row.id)?.selected!==false).map(row=>({scenarioId:row.id,scenarioName:row.name,plannedCount:row.quota,ratio:row.ratio,branchPlan:(row.profiles||[]).map(profile=>({profileId:profile.id,profileName:profile.name,plannedCount:profile.quota,ratio:profile.ratio}))}))}:{}),...(isSynthesis&&draft.modality==='时序数据'?{samplingPlanSnapshot:dimensionSamplingSnapshot,runtimeSnapshot:{point_count_range:[Number(values.minTimeSteps),Number(values.maxTimeSteps)],step_minutes:Number(values.stepMinutes),timezone:'Asia/Shanghai',start_time_policy:'per_sample_generated',seed_policy:'system_generated'}}:{}),expansionTargetConfig,selectableCount,effectiveTargetCount:isExpansion?expansionEstimate:targetCount,qualityCheckedSampleCount:isQuality?qualityCheckedSampleCount:undefined,qualityUncheckedSampleCount:isQuality?qualityUncheckedSampleCount:undefined,businessType:template.businessType,stages:[draft.taskType],input,output,templateProfile:template,sourceEnhanced:selectedVersion?.versionKind==='增强'||selectedVersion?.taskConfigSnapshot?.taskType==='数据增强',privacyPolicy:template.configuration?.privacy_policy||template.documentSnapshot?.privacy_policy||[],qualityRules:effectiveQualityRules,inputDatasetId:selectedDataset?.id,inputVersionId:selectedVersion?.version,sourceVersion:selectedVersion,...((isAugmentation||isExpansion)?{qualityReportId:selectedReport?.reportId,qualityReportSnapshot:selectedReport}:{} ),...(isAugmentation?{selectionRuleId:undefined,sampleSelection:undefined,augmentationSelection:{mode:augmentationMode,threshold:augmentationThreshold,reportId:selectedReport?.reportId,median:augmentationCandidates.median,includeUnchecked},sourceSelection:buildAugmentationSelection(augmentationCandidates,includeUnchecked)}:{} )});
+    }catch(error){if(!error?.errorFields)message.error(error.message||'任务提交失败');else {message.warning('请完成必填配置');form.scrollToField(error.errorFields[0]?.name,{behavior:'smooth',block:'center',focus:true});}}finally{setSubmitting(false);}
+  };
+  const saveDraft=async()=>{
+    if(submitting)return;
+    setSubmitting(true);
+    try{
+      await onSaveDraft({...form.getFieldsValue(true),modality:draft.modality,taskType:draft.taskType,expansionTargetConfig});
+      message.success('草稿已保存，可在任务列表继续编辑');
+    }catch(error){message.error(`草稿保存失败：${error.message||'请重试'}`);}
+    finally{setSubmitting(false);}
   };
   const initialTemplate=publishedTemplates[0];
-  const evidenceContent=isSynthesis?<TemplateEvidence template={selectedTemplate} modality={draft.modality}/>:isQuality?<QualityRulesEvidence template={selectedTemplate} modality={draft.modality}/>:<QualityReportEvidence dataset={selectedDataset} version={selectedVersion}/>;
+  const evidenceContent=isSynthesis?<TemplateEvidence template={selectedTemplate} modality={draft.modality}/>:isQuality?<QualityRulesEvidence template={selectedTemplate} modality={draft.modality} version={selectedVersion}/>:<QualityReportEvidence dataset={selectedDataset} version={selectedVersion}/>;
   const configurationContent=isSynthesis?synthesisFields:<>{inputCard}{selectedVersion?(isQuality?qualityFields:isAugmentation?augmentationFields:expansionFields):<Card className="task-step-card section-title"><Empty description="选择输入数据集和版本后显示本次任务配置"/></Card>}</>;
   return <div className="create-task-page">
-    <Flex justify="space-between" align="center" className="create-page-heading"><Space><Button type="text" shape="circle" icon={<LeftOutlined/>} aria-label={`返回${modalityLabel}任务列表`} onClick={onCancel}/><Title level={3}>{taskPageTitle}</Title></Space><Space><Button disabled={submitting} onClick={()=>message.success('草稿已保存')}>保存草稿</Button><Button type="primary" loading={submitting} onClick={submit}>提交任务</Button></Space></Flex>
-    <Form form={form} layout="vertical" initialValues={{name:draft.name,description:draft.description,templateId:draft.templateId||initialTemplate?.id,businessType:initialTemplate?.businessType,sampleCount:20,resolution:'2480 × 1754',patternRatio:60,minTurns:3,maxTurns:8,minTimeSteps:48,maxTimeSteps:48,stepMinutes:15,generationModel:initialTemplate?.defaultModel||'Qwen3-14B',generationParametersEnabled:false,generationParameters:'{\n  "temperature": 0.7,\n  "top_p": 0.9\n}',samplingMode:'ratio',samplingAllocations:defaultTaskSamplingAllocations(initialTemplate?.configuration?.sampler||defaultConversationSampler(),20),samplingAdvancedEnabled:false,samplingBranchAllocations:defaultBranchAllocations(initialTemplate?.configuration?.sampler||defaultConversationSampler()),dimensionSamplingRatios:defaultDimensionRatios(initialTemplate?.configuration?.sampler?.dimensions||initialTemplate?.configuration?.event_generation?.sampling_dimensions||[]),overrideBackgroundGeneration:false,imageGenerationModel:initialTemplate?.imageModel,backgroundPrompt:initialTemplate?.backgroundPrompt,qualityScope:'full',samplingRatio:10,qualityModel:'Qwen3-VL-8B-Instruct',qualityParametersEnabled:false,qualityParameters:'{\n  "temperature": 0.1\n}',enhancementModel:'Qwen3-14B',enhancementParametersEnabled:false,enhancementParameters:'{\n  "temperature": 0.7\n}',expansionModel:'Qwen3-14B',expansionParametersEnabled:false,expansionParameters:'{\n  "temperature": 0.8\n}',outputMode:'newDataset',outputDatasetName:`${initialTemplate?.businessType||''}数据集`,versionNote:isQuality?'质检标注版本':isAugmentation?'数据增强与自动复检版本':isExpansion?'定向扩增与自动复检版本':'数据合成结果',sampleSelection:'pass',selectionThreshold:75,targetCount:100,enhancementIntensity:'中等',customEnhancementEnabled:false,customExpansionEnabled:false,customExpansionSettings:[{name:'',labels:[],count:20,prompt:'',model:'Qwen3-14B',parameters:'{\n  "temperature": 0.8\n}'}],...(draft.configSnapshot||{}),inputDatasetId:draft.inputDatasetId,inputVersionId:draft.inputVersionId}}>
-      <Card className="task-fixed-header"><Row gutter={20} align="bottom"><Col span={12}><Form.Item name="name" label="任务名称" rules={[{required:true,message:'请输入任务名称'}]}><Input maxLength={50}/></Form.Item></Col><Col span={12}><Form.Item name="description" label="任务描述"><Input maxLength={200} placeholder="可选，最多 200 字"/></Form.Item></Col></Row></Card>
-      <div className="task-two-column-layout"><section className="task-configuration-column"><div className="task-column-heading"><div><Title level={5}>本次任务配置</Title><Text type="secondary">以下内容会写入本次任务配置快照</Text></div></div>{configurationContent}</section><aside className="task-evidence-column"><div className="task-column-heading"><div><Title level={5}>任务依据</Title><Text type="secondary">来自上游模板或质检结果，不可在本任务中修改</Text></div></div>{evidenceContent}</aside></div>
+    <Flex justify="space-between" align="center" className="create-page-heading"><Space><Button type="text" shape="circle" icon={<LeftOutlined/>} aria-label={`返回${modalityLabel}任务列表`} onClick={onCancel}/><Title level={3}>{taskPageTitle}</Title></Space><Space><Button disabled={submitting} onClick={onCancel}>取消</Button><Button disabled={submitting} onClick={saveDraft}>保存草稿</Button><Button type="primary" loading={submitting} onClick={()=>{setWorkspaceTab("configure");submit();}}>提交任务</Button></Space></Flex>
+<Form form={form} layout="vertical" initialValues={{name:draft.name,description:draft.description,templateId:draft.templateId||initialTemplate?.id,businessType:initialTemplate?.businessType,sampleCount:20,resolution:'2480 × 1754',patternRatio:60,minTurns:3,maxTurns:8,minTimeSteps:48,maxTimeSteps:48,stepMinutes:15,generationModel:initialTemplate?.defaultModel||'Qwen3-14B',generationParametersEnabled:false,generationParameters:'{\n  "temperature": 0.7,\n  "top_p": 0.9\n}',samplingMode:'ratio',samplingAllocations:defaultTaskSamplingAllocations(initialTemplate?.configuration?.sampler||defaultConversationSampler(),20),samplingAdvancedEnabled:false,samplingBranchAllocations:defaultBranchAllocations(initialTemplate?.configuration?.sampler||defaultConversationSampler()),dimensionSamplingRatios:defaultDimensionRatios(initialTemplate?.configuration?.sampler?.dimensions||initialTemplate?.configuration?.event_generation?.sampling_dimensions||[]),overrideBackgroundGeneration:false,imageGenerationModel:initialTemplate?.imageModel,backgroundPrompt:initialTemplate?.backgroundPrompt,qualityScope:'full',samplingRatio:10,qualityModel:'Qwen3-14B',qualityVlmModel:'Qwen3-VL-8B-Instruct',qualityParametersEnabled:false,qualityParameters:'{\n  "temperature": 0.1\n}',enhancementModel:'Qwen3-14B',enhancementParametersEnabled:false,enhancementParameters:'{\n  "temperature": 0.7\n}',expansionModel:defaultExpansionModel(draft.modality),expansionParametersEnabled:false,expansionParameters:'{\n  "temperature": 0.8\n}',outputMode:'newDataset',outputDatasetName:`${initialTemplate?.businessType||''}数据集`,versionNote:isQuality?'质检标注版本':isAugmentation?'数据增强版本':isExpansion?'定向扩增版本':'数据合成结果',autoQualityEnabled:draft.configSnapshot?autoQualityEnabled({...draft,...draft.configSnapshot}):false,targetCount:100,enhancementIntensity:'中等',customEnhancementEnabled:false,customExpansionEnabled:false,customExpansionSettings:[{name:'',labels:[],count:20,prompt:'',model:defaultExpansionModel(draft.modality),parameters:'{\n  "temperature": 0.8\n}'}],...(draft.configSnapshot||{}),inputDatasetId:draft.inputDatasetId,inputVersionId:draft.inputVersionId}}>
+      <Card className="task-fixed-header"><Row gutter={20} align="bottom"><Col span={12}><Form.Item name="name" label="任务名称" rules={[{required:true,message:'请输入任务名称'}]}><Input placeholder="请输入任务名称" maxLength={50}/></Form.Item></Col><Col span={12}><Form.Item name="description" label="任务描述"><Input maxLength={200} placeholder="可选，最多 200 字"/></Form.Item></Col></Row></Card>
+      <section className="task-configuration-column">{isSynthesis&&<Button style={{marginBottom:12}} onClick={()=>openBasis('rules')}>查看模板规则 →</Button>}{configurationContent}{automaticQualityCard}</section>
+      <Drawer title="任务依据" width="min(1100px, 94vw)" open={basisOpen} onClose={()=>setBasisOpen(false)}>{isQuality?<QualityRulesEvidence template={selectedTemplate} modality={draft.modality} version={selectedVersion}/>:isSynthesis?evidenceContent:<Tabs activeKey={basisTab} onChange={setBasisTab} items={[{key:'report',label:'质检报告',children:<QualityReportEvidence dataset={selectedDataset} version={selectedVersion}/>},{key:'rules',label:'模板规则',children:<TemplateRulesTable modality={draft.modality} template={selectedTemplate} rules={effectiveQualityRules}/>} ]}/>}</Drawer>
+
     </Form>
   </div>;
 }
@@ -1439,19 +1510,30 @@ function prototypeTaskId(seed=Date.now()) {
   return `TASK-${stamp}-${String(parseInt(fixedHashId(seed).slice(0,6),16)%10000).padStart(4,'0')}`;
 }
 
-function commitPrototypeTaskOutput(values, taskId, versionId, setDatasets) {
+function commitPrototypeTaskOutput(values, taskId, versionId, setDatasets, executedTask) {
+  if(executedTask&&values.taskType!=='数据质检'&&!executedTask.executionSummary.outputSampleCount)return;
   const now=nowDateTime();
   const template=values.templateProfile;
   setDatasets(items=>{
+    if(values.taskType!=='数据质检'&&items.some(dataset=>dataset.versions.some(version=>version.version===versionId)))return items;
     const selectedDataset=items.find(dataset=>dataset.id===values.inputDatasetId);
     const selectedVersion=selectedDataset?.versions.find(version=>version.version===values.inputVersionId);
+    if(values.taskType==='数据质检'){
+      if(!selectedVersion||!executedTask||executedTask.status==='运行中')return items;
+      const meta=qualityExecutionMetadata(executedTask);
+      const reportId=`QREPORT-${fixedHashId(executedTask?.runNumber>1?`${taskId}-run-${executedTask.runNumber}`:taskId)}`;
+
+      const report={...meta,reportId,taskId,taskName:values.name,createdAt:now,outputVersionId:selectedVersion.version,inputVersionId:selectedVersion.version,
+        resultFile:`quality/${taskId}.jsonl`,sampleExecution:executedTask};
+      return items.map(dataset=>dataset.id!==selectedDataset.id?dataset:{...dataset,updatedAt:now,versions:dataset.versions.map(version=>version.version===selectedVersion.version?appendQualityReport(version,report,executedTask,now):version)});
+    }
     const sourceForSynthesis=values.outputMode==='newVersion'?items.find(dataset=>dataset.name===values.targetDataset):null;
     const sourceDataset=values.taskType==='数据合成'?sourceForSynthesis:selectedDataset;
     const sourceVersion=values.taskType==='数据合成'?sourceForSynthesis?.versions.find(version=>version.version===sourceForSynthesis.defaultVersion):selectedVersion;
-    const sampleCount=values.taskType==='数据质检'?numericSampleCount(sourceVersion?.samples):values.taskType==='数据合成'?Number(values.sampleCount||0):Number(values.effectiveTargetCount||values.targetCount||0);
+    const sampleCount=executedTask?executedTask.executionSummary.outputSampleCount:values.taskType==='数据质检'?numericSampleCount(sourceVersion?.samples):values.taskType==='数据合成'?Number(values.sampleCount||0):Number(values.effectiveTargetCount||values.targetCount||0);
     const partialQuality=values.taskType==='数据质检'&&values.qualityScope==='sample';
     const versionKind=values.taskType==='数据质检'?(partialQuality?'抽检标注':'质检标注'):{数据合成:'合成',数据增强:'增强',定向扩增:'定向扩增'}[values.taskType];
-    const qualityChecked=values.taskType!=='数据合成';
+    const qualityChecked=autoQualityEnabled(values);
     const checkedSampleCount=partialQuality?Math.min(sampleCount,Number(values.qualityCheckedSampleCount||0)):qualityChecked?sampleCount:0;
     const nextVersion={
       id:versionId,version:versionId,note:values.versionNote,versionKind,source:taskId,sourceName:values.name,
@@ -1461,15 +1543,30 @@ function commitPrototypeTaskOutput(values, taskId, versionId, setDatasets) {
       taskConfigSnapshot:values,
     };
     if(qualityChecked){
-      nextVersion.quality=93.6;
+
       nextVersion.qualityReportId=`QREPORT-${fixedHashId(`${taskId}-${versionId}`)}`;
-      nextVersion.qualityReport=buildVersionQualityReport(values.modality,nextVersion);
+      nextVersion.qualityReport={};
       nextVersion.qualityReport={...nextVersion.qualityReport,reportId:nextVersion.qualityReportId,inputVersionId:sourceVersion?.version,outputVersionId:versionId,templateId:template?.id,templateVersion:template?.version,executionRange:partialQuality?'sample':'full',samplingRatio:partialQuality?Number(values.samplingRatio):100,checkedSampleCount,uncheckedSampleCount:Math.max(0,sampleCount-checkedSampleCount),ruleSnapshot:values.qualityRules||[]};
       nextVersion.sampleQualityLabels={schemaVersion:'sample-quality/v1',coverage:partialQuality?'partial':'full',checkedSampleCount,uncheckedSampleCount:Math.max(0,sampleCount-checkedSampleCount),uncheckedLabel:'未质检',fields:['overall_score','overall_result','rule_results','issue_labels']};
-      if(values.taskType==='数据增强')nextVersion.enhancementSettings={sampleSelection:values.sampleSelection,selectionThreshold:values.selectionThreshold,directions:null,methods:values.modality==='文档图像'?['隐私增强',...(values.documentEnhancementTypes||[])]:values.modality==='对话文本'?['隐私增强',...(values.conversationSemanticMethods||[])]:['隐私增强',...(values.timeseriesEventMethods||[]),...(values.timeseriesParameterMethods||[])],mandatoryPrivacy:true,documentConfig:values.modality==='文档图像'?{semanticRuleIds:values.documentSemanticRules||[],imageMethods:values.documentImageMethods||[],backgroundMethods:values.documentBackgroundMethods||[],semanticCustom:values.documentSemanticCustomEnabled?{name:values.documentSemanticCustomName,prompt:values.documentSemanticCustomPrompt}:null,backgroundCustom:values.documentBackgroundCustomEnabled?{name:values.documentBackgroundCustomName,prompt:values.documentBackgroundCustomPrompt}:null,semanticModel:values.documentEnhancementTypes?.includes('语义增强')?{model:values.semanticEnhancementModel,parametersEnabled:values.semanticEnhancementParametersEnabled,parameters:values.semanticEnhancementParameters}:null,backgroundModel:values.documentEnhancementTypes?.includes('背景增强')?values.backgroundEnhancementModel:null}:null,timeseriesConfig:values.modality==='时序数据'?{eventMethods:values.timeseriesEventMethods||[],parameterMethods:values.timeseriesParameterMethods||[],eventCustom:values.timeseriesEventCustomEnabled?{name:values.timeseriesEventCustomName,prompt:values.timeseriesEventCustomPrompt}:null,parameterCustom:values.timeseriesParameterCustomEnabled?{name:values.timeseriesParameterCustomName,prompt:values.timeseriesParameterCustomPrompt}:null}:null,custom:values.modality==='对话文本'&&values.customEnhancementEnabled?{name:values.customEnhancementName,prompt:values.customEnhancementPrompt}:null,privacyMethod:values.modality==='对话文本'?values.conversationPrivacyMethod:values.modality==='时序数据'?values.timeseriesPrivacyMethod:null,privacyMethods:values.privacyMethods||null};
+      if(values.taskType==='数据增强')nextVersion.enhancementSettings={directions:null,methods:values.modality==='文档图像'?[...(values.documentEnhancementTypes||[])]:values.modality==='对话文本'?[...(values.conversationSemanticMethods||[])]:[...(values.timeseriesEventMethods||[]),...(values.timeseriesParameterMethods||[])],documentConfig:values.modality==='文档图像'?{semanticRuleIds:values.documentSemanticRules||[],imageMethods:values.documentImageMethods||[],imageIntensities:Object.fromEntries((values.documentImageMethods||[]).map(name=>[name,values.documentImageIntensities?.[name]||'轻度'])),backgroundMethods:values.documentBackgroundMethods||[],semanticCustom:values.documentSemanticCustomRules||[],backgroundCustom:values.documentBackgroundCustomRules||[],semanticModel:values.documentEnhancementTypes?.includes('语义增强')?{model:values.semanticEnhancementModel,parametersEnabled:values.semanticEnhancementParametersEnabled,parameters:values.semanticEnhancementParameters}:null,backgroundModel:values.documentEnhancementTypes?.includes('背景增强')?values.backgroundEnhancementModel:null}:null,timeseriesConfig:values.modality==='时序数据'?{eventMethods:values.timeseriesEventMethods||[],parameterMethods:values.timeseriesParameterMethods||[],eventCustom:values.timeseriesEventCustomRules||[],parameterCustom:values.timeseriesParameterCustomRules||[]}:null,custom:values.modality==='对话文本'?(values.conversationSemanticCustomRules||[]):[]};
       if(values.taskType==='定向扩增')nextVersion.expansionSettings={targetKeys:values.coverageGapKeys,targetConfig:values.expansionTargetConfig||{},coverageGapKeys:(values.coverageGapKeys||[]).filter(key=>!String(key).startsWith('quality-')),qualityRuleKeys:(values.coverageGapKeys||[]).filter(key=>String(key).startsWith('quality-')),customSettings:values.customExpansionEnabled?values.customExpansionSettings||[]:[]};
     }
-    const linkConsumer=dataset=>({...dataset,versions:dataset.versions.map(version=>version.version===sourceVersion?.version?{...version,consumers:[{id:taskId,name:values.name,taskType:values.taskType,updatedAt:now,status:'已完成'},...(version.consumers||[])]}:version)});
+    if(values.taskType==='定向扩增')nextVersion.expansionSettings={targets:values.expansionTargets||[],sourceReportId:values.qualityReportId,targetKeys:values.coverageGapKeys,targetConfig:values.expansionTargetConfig||{},coverageGapKeys:(values.coverageGapKeys||[]).filter(key=>!String(key).startsWith('quality-')),customSettings:values.customExpansionEnabled?values.customExpansionSettings||[]:[]};
+    if(executedTask){
+      nextVersion.executionSummary=executedTask.executionSummary;
+      nextVersion.sampleExecution=executedTask;
+      nextVersion.fullQualityChecked=false;
+      if(qualityChecked){
+        const meta=qualityExecutionMetadata(executedTask);
+
+        nextVersion.qualityReport={...nextVersion.qualityReport,...meta,reportId:nextVersion.qualityReportId,taskId,createdAt:now};
+        nextVersion.checkedSampleCount=meta.checkedSampleCount;
+
+        nextVersion.sampleQualityLabels={...nextVersion.sampleQualityLabels,coverage:meta.errorSampleCount||meta.uncheckedSampleCount?'partial':'full',checkedSampleCount:meta.checkedSampleCount,uncheckedSampleCount:meta.uncheckedSampleCount,errorSampleCount:meta.errorSampleCount,fields:['rule_results','issue_labels','executionStatus','badcaseId']};
+        nextVersion.fullQualityChecked=isFullQualityVersion(nextVersion);
+      }
+    }
+    const linkConsumer=dataset=>({...dataset,versions:dataset.versions.map(version=>version.version===sourceVersion?.version?{...version,consumers:[{id:taskId,name:values.name,taskType:values.taskType,updatedAt:now,status:executedTask?.status||'已完成'},...(version.consumers||[])]}:version)});
     if(values.taskType==='数据合成'&&values.outputMode==='newDataset'){
       const datasetId=createDatasetId(`${taskId}-${values.outputDatasetName}`,now);
       return [{id:datasetId,name:values.outputDatasetName,modality:values.modality,businessType:template?.businessType,status:'可用',desc:values.description||`由${template?.name||'已发布模板'}批量合成。`,defaultVersion:versionId,totalSamples:sampleCount,reference:true,sourceType:'任务生成',updatedAt:now,templateId:template?.id,templateVersion:template?.version,versions:[nextVersion]},...items];
@@ -1482,38 +1579,64 @@ function commitPrototypeTaskOutput(values, taskId, versionId, setDatasets) {
   });
 }
 
-function ProductTaskDetail({ task }) {
-  const config=task.configSnapshot||{};
-  const configJson=JSON.stringify(config,(key,value)=>key==='fingerprint'||key==='templateFingerprint'?undefined:value,2);
+function ProductTaskDetail({ task, initialTab='info', datasets:providedDatasets }) {
+  const datasets=providedDatasets||readStore('application-state',{}).datasets||[];
+  const [activeTab,setActiveTab]=useState(initialTab==='config'?'info':['usage','result'].includes(initialTab)?'logs':initialTab);
+  const config=resolveTaskConfiguration(task,datasets);
+  const configJson=JSON.stringify(config,null,2);
   const template=config.templateProfile||templateForDataset({modality:task.modality,businessType:task.businessType,templateId:config.templateId});
-  const resultItems=[
-    {key:'output',label:'正式输出',children:task.output},{key:'version',label:'输出版本 ID',children:<Text copyable>{task.outputVersionId||'-'}</Text>},
-    {key:'source',label:'来源数据集版本',children:task.sourceVersionId?<Text copyable>{task.sourceVersionId}</Text>:'-'},{key:'report',label:'质检 / 复检报告',children:task.taskType==='数据合成'?'-':`QREPORT-${fixedHashId(`${task.id}-${task.outputVersionId}`)}`},
-  ];
-  return <Tabs className="task-detail-tabs" defaultActiveKey="info" items={[
-    {key:'info',label:'基础信息',children:<><Descriptions bordered size="small" column={2} className="detail-descriptions" items={[{key:'id',label:'任务 ID',children:<Text copyable>{task.id}</Text>},{key:'type',label:'任务类型',children:<Tag color={taskTypeColor(task.taskType)}>{task.taskType}</Tag>},{key:'status',label:'状态',children:<StatusTag value={task.status}/>},{key:'updated',label:'更新时间',children:formatDateTime(task.updated||task.created)},{key:'description',label:'任务描述',span:2,children:task.description||'-'},{key:'input',label:'输入引用',children:task.input},{key:'output',label:'输出引用',children:task.output}]}/><Divider orientation="left">输入血缘</Divider><TemplateSnapshot template={template}/></>},
-    ...(task.taskType==='数据合成'?[]:[{key:'rules',label:'模板质检规则',children:<TemplateRulesTable modality={task.modality} template={template} rules={config.qualityRules||templateQualityRules(task.modality,template)} title={task.taskType==='数据质检'?'已执行的模板质检规则':'输入报告依据与自动复检规则'}/> }]),
-    {key:'config',label:'配置快照',children:<div className="task-rule-expanded"><pre>{configJson}</pre><Text copyable={{text:configJson}}>复制配置快照</Text></div>},
-    {key:'logs',label:'运行日志',children:<Timeline items={[{color:'green',children:`${task.taskType}配置校验通过`},{color:'green',children:task.taskType==='数据质检'?(config.qualityScope==='sample'?`${config.qualityCheckedSampleCount||0} 条抽检样本质检完成，其余样本写入未质检标签`:'全量样本质检与标签写入完成'):task.taskType==='数据增强'?'增强处理与自动复检完成':task.taskType==='定向扩增'?'定向扩增与自动复检完成':'批量推理与结果写入完成'},{color:'green',children:'正式版本已原子化提交'}]}/>},
-    {key:'usage',label:'API 用量',children:<ApiUsageSummary usage={task.apiUsage}/>},
-    {key:'result',label:'运行结果',children:<Descriptions bordered size="small" column={2} items={resultItems}/>},
+  const sourceVersionId=task.sourceVersionId||config.inputVersionId;
+  const sourceDataset=task.taskType==='数据合成'?null:datasets.find(item=>item.id===(task.sourceDatasetId||config.inputDatasetId))
+    || (task.taskType==='数据合成'?null:datasets.find(item=>item.versions?.some(version=>version.version===sourceVersionId)));
+  const taskQuality=reportForQualityTask(task,datasets);
+  const outputDataset=taskQuality?.dataset||datasets.find(item=>item.versions?.some(version=>version.version===task.outputVersionId));
+  const datasetInfo=(dataset,versionId)=>dataset||versionId?<Space direction="vertical" size={2}>
+    {dataset?<Typography.Link href={`?datasetDetail=${encodeURIComponent(dataset.id)}`} target="_blank" rel="noopener noreferrer">{dataset.name}</Typography.Link>:<Text>-</Text>}
+    <Text type="secondary">数据集 ID：{dataset?.id||'-'}</Text>
+    <Text type="secondary">版本 ID：{versionId||'-'}</Text>
+  </Space>:'-';
+  const outputVersion=taskQuality?.version||outputDataset?.versions?.find(version=>version.version===task.outputVersionId);
+  const matchingReport=taskQuality?.report||qualityReports(outputVersion).find(report=>report.taskId===task.id);
+  const executionReport=task.taskType==='数据质检'&&task.configSnapshot?.qualityProtocolVersion===2&&task.execution
+    ?{...qualityExecutionMetadata(task),taskId:task.id,reportId:`QREPORT-${fixedHashId(task.id)}`,inputVersionId:sourceVersionId,outputVersionId:sourceVersionId}
+    :null;
+  const prototypeTaskReport=prototypeQualityTaskReport(task,{dataset:outputDataset||sourceDataset,
+    version:outputVersion||sourceDataset?.versions?.find(version=>version.version===sourceVersionId),
+    template,matchingReport,rules:templateQualityRules(task.modality,template)});
+  const prototypeOutputReport=['数据增强','定向扩增'].includes(task.taskType)&&['已完成','部分完成'].includes(task.status)&&outputDataset&&outputVersion&&matchingReport?.protocolVersion!==2
+    ?prototypeHistoricalQualityReport(outputDataset,outputVersion):null;
+  const detailReport=matchingReport?.protocolVersion===2?matchingReport:executionReport||prototypeTaskReport||(prototypeOutputReport?{...prototypeOutputReport,reportId:`QREPORT-MOCK-${task.id}`,taskId:task.id,inputVersionId:sourceVersionId,outputVersionId:outputVersion.version}:null)||matchingReport;
+  const qualityReportId=detailReport?.reportId||(task.outputVersionId&&task.taskType!=='数据合成'?`QREPORT-${fixedHashId(`${task.id}-${task.outputVersionId}`)}`:null);
+  const logJson=JSON.stringify(buildTaskDetailLog(task,outputDataset,qualityReportId),null,2);
+  return <Tabs className="task-detail-tabs" activeKey={activeTab} onChange={setActiveTab} items={[
+    {key:'info',label:'基础信息',children:<><Descriptions bordered size="small" column={2} className="detail-descriptions" items={[
+      {key:'id',label:'任务 ID',children:<Text copyable>{task.id}</Text>},
+      {key:'type',label:'任务类型',children:task.taskType},
+      {key:'status',label:'状态',children:<StatusTag value={task.status}/>},
+      {key:'business',label:'业务类型',children:task.businessType||template?.businessType||'-'},
+      {key:'updated',label:'更新时间',span:2,children:formatDateTime(task.updated||task.created)},
+      {key:'description',label:'任务描述',span:2,children:task.description||'-'},
+      {key:'template',label:'关联模板',span:2,children:template?<Space direction="vertical" size={2}><Typography.Link href={`?templateReference=${encodeURIComponent(template.id)}&referenceTask=${encodeURIComponent(task.id)}`} target="_blank" rel="noopener noreferrer">{template.name||template.id}</Typography.Link><Text type="secondary" copyable={Boolean(template.id)}>{template.id||'-'}</Text></Space>:'-'},
+      {key:'sourceDataset',label:'来源数据集',span:2,children:task.taskType==='数据合成'?'-':datasetInfo(sourceDataset,sourceVersionId)},
+      {key:'outputDataset',label:task.taskType==='数据质检'?'报告所属数据集':'生成数据集',span:2,children:datasetInfo(outputDataset,task.taskType==='数据质检'?outputVersion?.version:task.outputVersionId)},
+    ]}/><details open className="config-snapshot"><summary>配置快照</summary>{!Object.keys(config).length?<Empty description="暂无记录"/>:<div className="task-rule-expanded"><Flex justify="flex-end" style={{marginBottom:12}}><Text copyable={{text:configJson}}>复制配置快照</Text></Flex><pre>{configJson}</pre></div>}</details></>},
+    ...(autoQualityEnabled({...task,...task.configSnapshot})?[{key:'quality-report',label:'质检报告',children:detailReport?<RuleQualityReport report={detailReport}/>:<Empty description={task.taskType==='数据质检'?(task.status==='运行中'||task.status==='排队中'?'任务尚未生成质检结果':'该历史任务未保存逐规则质检结果'):'该任务未保存质检结果'}/>}]:[]),
+    {key:'logs',label:'运行日志',children:<div className="task-rule-expanded"><Flex justify="flex-end" style={{marginBottom:12}}><Button onClick={()=>{try{downloadTaskLog(task.id,logJson);message.success('已开始下载日志');}catch(error){message.error('日志下载失败，请重试');}}}>下载日志</Button></Flex><pre>{logJson}</pre></div>},
+    ...(task.taskType==='数据质检'?[]:[{key:'badcases',label:`Badcase${task.badcaseTrackingVersion?`（${task.executionSummary?.badcaseSampleCount||0}）`:''}`,children:<BadcasePanel key={task.id} task={task}/>}]),
   ]}/>;
 }
 
-function TaskCenter({ datasets, setDatasets, modality, pageTitle, startCreate, onStartConsumed, onNavigate }) {
-  const [tasks,setTasks]=useState(()=>normalizeTaskTimes(initialTasks)); const [tab,setTab]=useState('all'); const [taskType,setTaskType]=useState('all'); const [businessTypeFilter,setBusinessTypeFilter]=useState('all'); const [query,setQuery]=useState(''); const [draft,setDraft]=useState(null); const [detail,setDetail]=useState(null); const [detailTab,setDetailTab]=useState('info'); const [storeReady,setStoreReady]=useState(false);
+function TaskCenter({ datasets, setDatasets, tasks, setTasks, storeReady, modality, pageTitle, startCreate, onStartConsumed, onNavigate }) {
+  const [tab,setTab]=useState('all'); const [taskType,setTaskType]=useState('all'); const [businessTypeFilter,setBusinessTypeFilter]=useState('all'); const [query,setQuery]=useState(''); const [draft,setDraft]=useState(null); const [detail,setDetail]=useState(null); const [detailTab,setDetailTab]=useState('info');
   const modalityTasks=useMemo(()=>tasks.filter(t=>t.modality===modality),[tasks,modality]);
   const businessTypeOptions=useMemo(()=>[...new Set(modalityTasks.map(task=>task.businessType).filter(Boolean))].sort(),[modalityTasks]);
-  const filtered=useMemo(()=>modalityTasks.filter(t=>(tab==='all'||t.status===tab)&&(taskType==='all'||t.taskType===taskType)&&(businessTypeFilter==='all'||t.businessType===businessTypeFilter)&&(!query||t.name.includes(query)||t.id.includes(query))),[modalityTasks,tab,taskType,businessTypeFilter,query]);
+  const filtered=useMemo(()=>modalityTasks.filter(t=>(tab==='all'||t.status===tab||(tab==='异常'&&t.status==='失败'))&&(taskType==='all'||t.taskType===taskType)&&(businessTypeFilter==='all'||t.businessType===businessTypeFilter)&&(!query||t.name.includes(query)||t.id.includes(query))),[modalityTasks,tab,taskType,businessTypeFilter,query]);
   const activeCustomsIds=useMemo(()=>tasks.filter(item=>item.modality===modality&&item.backendJob?.id?.startsWith('CUSTOMS-')&&!['completed','failed','cancelled'].includes(item.backendJob.status)).map(item=>item.backendJob.id).sort().join('|'),[tasks,modality]);
   const activeSyntheticDocumentIds=useMemo(()=>tasks.filter(item=>item.modality===modality&&item.backendJob?.id?.startsWith('FICTIONAL-DOC-')&&!['completed','failed','cancelled'].includes(item.backendJob.status)).map(item=>item.backendJob.id).sort().join('|'),[tasks,modality]);
   const activeConversationIds=useMemo(()=>tasks.filter(item=>item.modality===modality&&item.backendJob?.id?.startsWith('CONV-')&&!['completed','failed','cancelled'].includes(item.backendJob.status)).map(item=>item.backendJob.id).sort().join('|'),[tasks,modality]);
   const activeColdChainIds=useMemo(()=>tasks.filter(item=>item.modality===modality&&item.backendJob?.id?.startsWith('COLDCHAIN-')&&!['completed','failed','cancelled'].includes(item.backendJob.status)).map(item=>item.backendJob.id).sort().join('|'),[tasks,modality]);
   const activeDetail=detail?tasks.find(item=>item.id===detail.id)||detail:null;
   const openDetail=task=>{setDetail(task);setDetailTab('info');};
-  const refreshTasks=async()=>{try{const [state,validations]=await Promise.all([localStoreApi.getState(),localStoreApi.getValidations()]);const saved=state.exists&&Array.isArray(state.tasks)?state.tasks:initialTasks;setTasks(normalizeTaskTimes(mergeValidationTasks(saved,validations.items||[])));}catch(error){message.warning(`本地历史恢复失败：${error.message}`);}finally{setStoreReady(true);}};
-  useEffect(()=>{refreshTasks();},[]);
-  useEffect(()=>{if(!storeReady)return;localStoreApi.saveState({tasks}).catch(error=>console.warn('任务状态保存失败',error));},[tasks,storeReady]);
   useEffect(()=>{setTab('all');setTaskType('all');setBusinessTypeFilter('all');setQuery('');setDetail(null);setDraft(null);},[modality]);
   useEffect(()=>{if(!startCreate)return;setDraft(typeof startCreate==='object'?{...startCreate,modality,taskType:startCreate.taskType}:{modality,taskType:startCreate});onStartConsumed?.();},[startCreate,modality]);
   useEffect(()=>{
@@ -1595,9 +1718,9 @@ function TaskCenter({ datasets, setDatasets, modality, pageTitle, startCreate, o
   },[activeColdChainIds]);
   const createMenuItems=[
     {key:'数据合成',label:<div className="create-menu-item"><Text strong>数据合成</Text><Text type="secondary">选择模板并配置现有合成参数</Text></div>},
-    {key:'数据质检',label:<div className="create-menu-item"><Text strong>数据质检</Text><Text type="secondary">对已有版本执行质量、隐私与覆盖检查</Text></div>},
+    {key:'数据质检',label:<div className="create-menu-item"><Text strong>数据质检</Text><Text type="secondary">对已有版本执行质量检查与标签统计</Text></div>},
     {key:'数据增强',label:<div className="create-menu-item"><Text strong>数据增强</Text><Text type="secondary">使用现有增强方式增加数据多样性</Text></div>},
-    {key:'定向扩增',label:<div className="create-menu-item"><Text strong>定向扩增</Text><Text type="secondary">根据已有低质标签和覆盖短板补充样本</Text></div>},
+    {key:'定向扩增',label:<div className="create-menu-item"><Text strong>定向扩增</Text><Text type="secondary">根据规则问题和标签分布不足补充样本</Text></div>},
   ];
   const editTask=task=>setDraft({
     ...(task.configSnapshot||{}),
@@ -1609,28 +1732,39 @@ function TaskCenter({ datasets, setDatasets, modality, pageTitle, startCreate, o
     configSnapshot:task.configSnapshot,
     editingTaskId:task.id,
   });
+  const makeRun=task=>{
+    const id=prototypeTaskId(`${Date.now()}-${Math.random()}`);
+    return newExecutionTask({...config,name:task.name,description:task.description,taskType:task.taskType,modality:task.modality,businessType:task.businessType},id,createVersionId(id));
+  };
   const publishTask=task=>{
-    setTasks(items=>items.map(item=>item.id===task.id?{...item,status:'排队中',progress:0,currentStage:'等待资源'}:item));
-    message.success(`任务“${task.name}”已发布并进入队列`);
+    editTask(task);
+    message.info('请确认配置后提交任务');
   };
   const rerunTask=task=>{
-    const now=Date.now();
-    const rerun={...task,key:`rerun-${now}`,id:`TASK-${now}`,status:'排队中',progress:0,currentStage:'等待资源',created:nowDateTime(),backendJob:undefined,pendingDatasetWrite:false,datasetWritten:false};
-    setTasks(items=>[rerun,...items]);
-    message.success(`已创建“${task.name}”的重跑任务`);
+    const config=resolveTaskConfiguration(task,datasets);
+    if(!config.templateProfile&&!config.templateId){message.error('历史任务缺少可重跑的模板配置，请复制为草稿补充后提交');return;}
+    const {runHistory=[],...previous}=task;
+    const run={...newExecutionTask({...config,name:task.name,description:task.description,taskType:task.taskType,modality:task.modality,businessType:task.businessType},task.id,createVersionId(`${task.id}-${Date.now()}`)),created:task.created,runNumber:(task.runNumber||1)+1,runHistory:[...runHistory,previous]};
+    setTasks(items=>items.map(item=>item.id===task.id?run:item));message.success('任务已重新开始运行');
   };
   const terminateTask=task=>Modal.confirm({
     title:`终止任务“${task.name}”？`,
-    content:'终止后当前执行将停止在现有进度，已产生的中间文件仍会保留，可从任务详情中查看。',
+    content:'终止后将停止处理与重试，保留已记录的执行结果。',
     okText:'确认终止',okType:'danger',cancelText:'取消',
     onOk:()=>{
-      setTasks(items=>items.map(item=>item.id===task.id?{...item,status:'已终止',currentStage:'用户手动终止',backendJob:item.backendJob?{...item.backendJob,status:'cancelled',message:'用户手动终止'}:item.backendJob}:item));
+      const current=tasks.find(item=>item.id===task.id)||task;
+      let stopped={...stopExecution(current),backendJob:current.backendJob?{...current.backendJob,status:'cancelled',message:'用户手动终止'}:current.backendJob};
+      if(stopped.execution&&stopped.taskType==='数据质检'){
+        stopped={...stopped,datasetWritten:true,outputVersionId:stopped.sourceVersionId,output:'已保存部分质检报告'};
+        commitPrototypeTaskOutput(stopped.configSnapshot,stopped.id,stopped.sourceVersionId,setDatasets,stopped);
+      }
+      setTasks(items=>items.map(item=>item.id===task.id?stopped:item));
       message.success('任务已终止');
     },
   });
   const copyTask=task=>{
     const now=Date.now();
-    const copied={...task,key:`copy-${now}`,id:`DRAFT-${now}`,name:`${task.name}（副本）`,status:'草稿',progress:0,currentStage:'尚未发布',created:nowDateTime(),backendJob:undefined,pendingDatasetWrite:false,datasetWritten:false};
+    const copied={...task,execution:undefined,executionSummary:undefined,badcaseTrackingVersion:undefined,outputVersionId:undefined,output:'-',apiUsage:undefined,key:`copy-${now}`,id:`DRAFT-${now}`,name:`${task.name}（副本）`,status:'草稿',progress:0,currentStage:'尚未发布',created:nowDateTime(),backendJob:undefined,pendingDatasetWrite:false,datasetWritten:false};
     setTasks(items=>[copied,...items]);
     message.success('任务已复制为草稿');
   };
@@ -1641,30 +1775,31 @@ function TaskCenter({ datasets, setDatasets, modality, pageTitle, startCreate, o
     onOk:()=>{setTasks(items=>items.filter(item=>item.id!==task.id));if(detail?.id===task.id)setDetail(null);message.success('任务已删除');},
   });
   const renderTaskActions=task=>{
-    const canEdit=['草稿','失败'].includes(task.status);
+    const canEdit=task.status==='草稿';
     const canPublish=task.status==='草稿';
-    const canRerun=['已完成','失败','已终止'].includes(task.status);
+    const canRerun=['已完成','异常','失败','已终止'].includes(task.status);
     const canTerminate=task.status==='运行中';
-    const canDelete=['草稿','已完成','失败','已终止'].includes(task.status);
+    const canDelete=['草稿','已完成','异常','失败','已终止'].includes(task.status);
     return <Space size={0} className="task-row-actions">
       <Button type="link" size="small" onClick={()=>openDetail(task)}>详情</Button>
-      <Button type="link" size="small" disabled={!canEdit} title={canEdit?'编辑任务配置':'仅草稿或失败任务可编辑'} onClick={()=>editTask(task)}>编辑</Button>
+      <Button type="link" size="small" disabled={!canEdit} title={canEdit?'编辑任务配置':'仅草稿任务可编辑'} onClick={()=>editTask(task)}>编辑</Button>
       <Button type="link" size="small" disabled={!canPublish} title={canPublish?'发布任务':'仅草稿任务可发布'} onClick={()=>publishTask(task)}>发布</Button>
-      <Button type="link" size="small" disabled={!canRerun} title={canRerun?'重新运行任务':'仅已完成或失败任务可重跑'} onClick={()=>rerunTask(task)}>重跑</Button>
-      <Button type="link" size="small" danger disabled={!canTerminate} title={canTerminate?'终止正在运行的任务':'仅运行中的任务可终止'} onClick={()=>terminateTask(task)}>终止</Button>
-      <Button type="link" size="small" danger disabled={!canDelete} title={canDelete?'删除任务':'排队中或运行中的任务不可删除'} onClick={()=>deleteTask(task)}>删除</Button>
-      <Button type="link" size="small" onClick={()=>copyTask(task)}>复制</Button>
+      <Dropdown trigger={['click']} placement="bottomRight" menu={{items:[
+        {key:'rerun',label:'重跑',disabled:!canRerun,onClick:()=>rerunTask(task)},
+        {key:'terminate',label:'终止',danger:true,disabled:!canTerminate,onClick:()=>terminateTask(task)},
+        {key:'delete',label:'删除',danger:true,disabled:!canDelete,onClick:()=>deleteTask(task)},
+        {key:'copy',label:'复制',onClick:()=>copyTask(task)}
+      ]}}><Button type="link" size="small">更多 <DownOutlined/></Button></Dropdown>
     </Space>;
   };
   const columns=[
     {title:'任务名称 / ID',dataIndex:'name',width:250,render:(v,r)=><div><Button type="link" className="name-link" onClick={()=>openDetail(r)}>{v}</Button><div className="muted-id">{r.id}</div></div>},
-    {title:'任务类型',dataIndex:'taskType',width:145,render:v=><Tag color={taskTypeColor(v)}>{v}</Tag>},
-    {title:'业务子类型',dataIndex:'businessType',width:110},
-    {title:'处理流程',dataIndex:'stages',width:240,render:v=><StageTags stages={v}/>},
+    {title:'任务类型',dataIndex:'taskType',width:145},
+    {title:'业务类型',dataIndex:'businessType',width:110},
     {title:'状态',dataIndex:'status',width:95,render:v=><Badge status={statusMap[v]} text={v}/>},
     {title:'进度',dataIndex:'progress',width:145,render:(v,r)=><Tooltip title={`当前执行：${r.currentStage||'等待资源'}`}><div className="task-progress-cell"><Progress percent={v} size="small" status={r.status==='失败'?'exception':r.status==='已完成'?'success':'active'}/></div></Tooltip>},
     {title:'更新时间',width:185,render:(_,r)=>formatDateTime(r.updated||r.backendJob?.updated_at||r.created)},
-    {title:'操作',fixed:'right',width:370,render:(_,r)=>renderTaskActions(r)}
+    {title:'操作',fixed:'right',width:240,render:(_,r)=>renderTaskActions(r)}
   ];
   const writeDataset = v => {
     if(!v.backendJob || !v.outputMode) return;
@@ -1776,19 +1911,18 @@ function TaskCenter({ datasets, setDatasets, modality, pageTitle, startCreate, o
     const ids=new Set(ready.map(task=>task.id));
     setTasks(items=>items.map(task=>ids.has(task.id)?{...task,pendingDatasetWrite:false,datasetWritten:true}:task));
   },[tasks]);
-  if(draft) return <CreateTaskPage draft={draft} datasets={datasets} onCancel={()=>setDraft(null)} onSubmit={v=>{
-    const taskId=prototypeTaskId(`${Date.now()}-${v.name}`);
-    const outputVersionId=createVersionId(`${taskId}-${v.taskType}`);
-    const sampleTotal=Number(v.sampleCount||v.effectiveTargetCount||v.targetCount||numericSampleCount(v.sourceVersion?.samples));
-    const executedSampleTotal=v.taskType==='数据质检'?Number(v.qualityCheckedSampleCount||sampleTotal):sampleTotal;
-    const semanticRules=(v.qualityRules||[]).filter(rule=>/LLM|Embedding|语义/.test(rule.method||'')).length;
-    const documentSemanticEnhancementCalls=v.modality==='文档图像'&&v.taskType==='数据增强'&&v.documentEnhancementTypes?.includes('语义增强')?sampleTotal:0;
-    const imageCalls=v.modality==='文档图像'?(v.taskType==='数据合成'&&v.templateProfile?.method==='底图生成法'||v.taskType==='定向扩增'||v.taskType==='数据增强'&&v.documentEnhancementTypes?.includes('背景增强')?sampleTotal:0):0;
-    const outputDatasetName=v.taskType==='数据合成'?(v.outputMode==='newVersion'?v.targetDataset:v.outputDatasetName):datasets.find(dataset=>dataset.id===v.inputDatasetId)?.name;
-    const nextTask={key:taskId,id:taskId,name:v.name,description:v.description,taskType:v.taskType,modality:v.modality,businessType:v.businessType,stages:[v.taskType],input:v.input,output:`${outputDatasetName||'数据集'} / ${outputVersionId}`,currentStage:'结果写入完成',status:'已完成',progress:100,created:nowDateTime(),updated:nowDateTime(),configSnapshot:v,outputVersionId,sourceDatasetId:v.inputDatasetId||null,sourceVersionId:v.inputVersionId||null,apiUsage:{model:v.taskType==='数据合成'?(v.modality==='对话文本'?executedSampleTotal*2:executedSampleTotal):executedSampleTotal*semanticRules+documentSemanticEnhancementCalls,image:imageCalls,tokens:Math.max(1,executedSampleTotal)*(v.modality==='对话文本'?1800:v.modality==='时序数据'?900:450)}};
-    commitPrototypeTaskOutput(v,taskId,outputVersionId,setDatasets);
+  if(draft) return <CreateTaskPage draft={draft} datasets={datasets} onCancel={()=>setDraft(null)} onSaveDraft={async values=>{
+    const id=draft.editingTaskId||`DRAFT-${crypto.randomUUID()}`;
+    const saved=buildTaskDraft(values,id,nowDateTime(),tasks.find(task=>task.id===id));
+    const next=upsertTaskDraft(tasks,saved);
+    await localStoreApi.saveTasks(next);
+    setTasks(next);
+    setDraft({...values,name:saved.name,editingTaskId:id,configSnapshot:saved.configSnapshot});
+  }} onSubmit={v=>{
+    const taskId=prototypeTaskId(`${Date.now()}-${v.name}-${Math.random()}`);
+    const nextTask=newExecutionTask(v,taskId,createVersionId(taskId));
     setTasks(items=>[nextTask,...items.filter(item=>item.id!==draft.editingTaskId)]);
-    message.success(`${v.taskType}任务已完成，并创建 1 个正式数据集版本`);
+    message.success('任务已提交');
     setDraft(null);
   }}/>;
   const isSyntheticDocumentDetail=Boolean(activeDetail?.backendJob?.id?.startsWith('FICTIONAL-DOC-'));
@@ -1799,26 +1933,10 @@ function TaskCenter({ datasets, setDatasets, modality, pageTitle, startCreate, o
     <PageHeader title={`${pageTitle}任务`} description={`独立管理${pageTitle}的数据合成、质检、增强和定向扩增任务`} actions={<Dropdown trigger={['click']} placement="bottomRight" menu={{items:createMenuItems,onClick:({key})=>setDraft({modality,taskType:key})}}><Button type="primary" icon={<PlusOutlined/>}>新建任务 <DownOutlined/></Button></Dropdown>}/>
     <StatCards items={[{title:'任务总数',value:modalityTasks.length,icon:<AppstoreOutlined/>,foot:`仅统计${pageTitle}任务`},{title:'运行中',value:modalityTasks.filter(item=>item.status==='运行中').length,icon:<PlayCircleOutlined/>,foot:'状态来自本地任务日志'},{title:'已完成',value:modalityTasks.filter(item=>item.status==='已完成').length,icon:<CheckCircleOutlined/>,foot:'刷新页面后仍会保留'},{title:'待处理异常',value:modalityTasks.filter(item=>item.status==='失败').length,icon:<ExclamationCircleOutlined/>,foot:'可在详情中查看失败阶段'}]}/>
     <Card className="main-card" styles={{body:{padding:0}}}><div>
-      <Flex justify="space-between" align="center" className="toolbar task-list-toolbar"><Space><Segmented value={taskType} onChange={setTaskType} options={[{label:'全部',value:'all'},{label:'合成',value:'数据合成'},{label:'质检',value:'数据质检'},{label:'增强',value:'数据增强'},{label:'定向扩增',value:'定向扩增'}]}/><Select value={tab} onChange={setTab} style={{width:150}} options={[{label:'全部任务状态',value:'all'},...['草稿','排队中','运行中','已完成','失败','已终止'].map(v=>({label:v==='失败'?'异常':v,value:v}))]}/><Select value={businessTypeFilter} onChange={setBusinessTypeFilter} style={{width:170}} options={[{label:'全部业务子类型',value:'all'},...businessTypeOptions.map(value=>({label:value,value}))]}/></Space><Input allowClear prefix={<SearchOutlined/>} placeholder="搜索任务名称或ID" value={query} onChange={e=>setQuery(e.target.value)} style={{width:250}}/></Flex>
+      <Flex justify="space-between" align="center" className="toolbar task-list-toolbar"><Space><Segmented value={taskType} onChange={setTaskType} options={[{label:'全部',value:'all'},{label:'合成',value:'数据合成'},{label:'质检',value:'数据质检'},{label:'增强',value:'数据增强'},{label:'定向扩增',value:'定向扩增'}]}/><Select placeholder="请选择选项" value={tab} onChange={setTab} style={{width:150}} options={[{label:'全部任务状态',value:'all'},...['草稿','排队中','运行中','已完成','异常','已终止'].map(v=>({label:v==='失败'?'异常':v,value:v}))]}/><Select placeholder="请选择选项" value={businessTypeFilter} onChange={setBusinessTypeFilter} style={{width:170}} options={[{label:'全部业务类型',value:'all'},...businessTypeOptions.map(value=>({label:value,value}))]}/></Space><Input allowClear prefix={<SearchOutlined/>} placeholder="搜索任务名称或ID" value={query} onChange={e=>setQuery(e.target.value)} style={{width:250}}/></Flex>
       <Table columns={columns} dataSource={filtered} scroll={{x:1490}} pagination={{pageSize:8,showTotal:t=>`共 ${t} 条`}}/>
     </div></Card>
-    <Drawer title="任务详情" size={1100} open={!!activeDetail} onClose={()=>{setDetail(null);setDetailTab('info');}}>{activeDetail&&<><Title level={4}>{activeDetail.name}</Title><Paragraph type="secondary">{activeDetail.description}</Paragraph><Space className="task-detail-tags"><Tag color={taskTypeColor(activeDetail.taskType)}>{activeDetail.taskType}</Tag><Tag color={modalityColor[activeDetail.modality]}>{activeDetail.modality}</Tag><Tag>{activeDetail.businessType}</Tag><StatusTag value={activeDetail.status}/></Space>{activeDetail.configSnapshot&&!activeDetail.backendJob?<ProductTaskDetail task={activeDetail}/>:isSyntheticDocumentDetail?<Tabs className="task-detail-tabs" activeKey={detailTab} onChange={setDetailTab} items={[
-      {key:'info',label:'任务信息',children:<><Descriptions bordered size="small" column={2} className="detail-descriptions" items={[{key:'1',label:'任务ID',children:<Text copyable>{activeDetail.id}</Text>},{key:'2',label:'模板版本',children:activeDetail.input},{key:'3',label:'业务类型',children:activeDetail.businessType},{key:'4',label:'输出',children:activeDetail.output},{key:'5',label:'创建时间',children:activeDetail.created},{key:'6',label:'随机种子',children:activeDetail.backendJob?.config?.seed??'-'}]}/><SyntheticDocumentTaskDetail job={activeDetail.backendJob}/></>},
-      {key:'logs',label:<Space size={6}>运行日志{activeDetail.status==='运行中'&&<Badge status="processing"/>}</Space>,children:<SyntheticDocumentTaskDetail job={activeDetail.backendJob}/>},
-      {key:'result',label:'运行结果',children:<SyntheticDocumentTaskDetail job={activeDetail.backendJob}/>},
-    ]}/>:isCustomsDetail?<Tabs className="task-detail-tabs" activeKey={detailTab} onChange={setDetailTab} items={[
-      {key:'info',label:'任务信息',children:<CustomsTaskInformation task={activeDetail}/>},
-      {key:'logs',label:<Space size={6}>运行日志{activeDetail.status==='运行中'&&<Badge status="processing"/>}</Space>,children:<CustomsTaskLogs task={activeDetail}/>},
-      {key:'result',label:'运行结果',children:<CustomsTaskDetail job={activeDetail.backendJob}/>},
-    ]}/>:isConversationDetail?<Tabs className="task-detail-tabs" activeKey={detailTab} onChange={setDetailTab} items={[
-      {key:'info',label:'任务信息',children:<ConversationTaskInformation task={activeDetail}/>},
-      {key:'logs',label:<Space size={6}>运行日志{activeDetail.status==='运行中'&&<Badge status="processing"/>}</Space>,children:<ConversationTaskLogs task={activeDetail}/>},
-      {key:'result',label:'运行结果',children:<ConversationTaskResults job={activeDetail.backendJob}/>},
-    ]}/>:isColdChainDetail?<Tabs className="task-detail-tabs" activeKey={detailTab} onChange={setDetailTab} items={[
-      {key:'info',label:'任务信息',children:<ColdChainTaskInformation task={activeDetail}/>},
-      {key:'logs',label:<Space size={6}>运行日志{activeDetail.status==='运行中'&&<Badge status="processing"/>}</Space>,children:<ColdChainTaskLogs task={activeDetail}/>},
-      {key:'result',label:'运行结果',children:<ColdChainTaskDetail job={activeDetail.backendJob} onOpenDataset={activeDetail.validationOnly?undefined:()=>{setDetail(null);onNavigate?.('data');}}/>},
-    ]}/>:<><Descriptions bordered size="small" column={2} className="detail-descriptions" items={[{key:'1',label:'任务ID',children:activeDetail.id},{key:'2',label:'当前节点',children:activeDetail.currentStage},{key:'3',label:'输入',children:activeDetail.input},{key:'4',label:'输出',children:activeDetail.output},{key:'5',label:'创建时间',children:activeDetail.created},{key:'6',label:'参数快照',children:activeDetail.backendJob?.parameters?'已保存到 job.json':'已保存'},...(activeDetail.backendJob?.storage_path?[{key:'7',label:'本地文件目录',span:2,children:<Text copyable>{activeDetail.backendJob.storage_path}</Text>}]:[])]}/>{activeDetail.backendJob?(activeDetail.backendJob.id?.startsWith('COLDCHAIN-')?<ColdChainTaskDetail job={activeDetail.backendJob} onOpenDataset={activeDetail.validationOnly?undefined:()=>{setDetail(null);onNavigate?.('data');}}/>:<CustomsTaskDetail job={activeDetail.backendJob}/>):<><Title level={5}>系统执行流程</Title><Timeline items={activeDetail.stages.map((s,i)=>({color:i===0?'green':i===1?'blue':'gray',children:`${s} · ${i===0?'已完成':i===1?'运行中':'等待中'}`}))}/><Alert type="info" showIcon message="任务通过输入版本、输出版本和参数快照形成数据血缘。"/></>}</>}</>}</Drawer>
+    <DetailPage title="任务详情" size={1100} open={!!activeDetail} onClose={()=>{setDetail(null);setDetailTab('info');}}>{activeDetail&&<><Title level={4}>{activeDetail.name}</Title><Paragraph type="secondary">{activeDetail.description}</Paragraph><ProductTaskDetail key={activeDetail.id} task={activeDetail} datasets={datasets}/></>}</DetailPage>
   </>;
 }
 
@@ -1836,9 +1954,9 @@ function HomePage({ onNavigate, onCreate }) {
 }
 
 const UPLOAD_TEMPLATE_BY_MODALITY = {
-  文档图像: { key: 'document', label: '文档类图像', hint: '文件夹需包含 images 和 annotations 两个目录，图片与标注 JSON 文件名一一对应。' },
-  对话文本: { key: 'conversation', label: '对话', hint: '文件夹需包含 JSONL 或 JSON 文件，每条数据必须包含 messages 对话数组。' },
-  时序数据: { key: 'timeseries', label: '时序', hint: '文件夹需包含 CSV 文件，表头至少包含 series_id、timestamp 和 value。' },
+  文档图像: { key: 'document', label: '文档类图像', hint: '直接上传 ZIP，无需解压；包内 images 与 annotations 同名对应。' },
+  对话文本: { key: 'conversation', label: '对话', hint: '直接上传 ZIP，无需解压；包内 data/conversations.jsonl 每行包含事件计划及完整会话。' },
+  时序数据: { key: 'timeseries', label: '时序', hint: '直接上传 ZIP，无需解压；包内 data 一条样本一个 JSON，包含事件和各字段时间—值序列。' },
 };
 
 const uploadEntryPath = entry => String(entry?.originFileObj?.webkitRelativePath || entry?.webkitRelativePath || entry?.name || '').replaceAll('\\', '/');
@@ -1899,152 +2017,107 @@ async function validateUploadFolder(modality, fileList) {
   return errors.length ? { status: 'failed', errors } : { status: 'passed', message: `格式校验通过：${csvFiles.length} 个 CSV 文件，共 ${rowCount} 行数据` };
 }
 
-function UploadDatasetPage({ onCancel, onSubmit, datasets }) {
-  const [form] = Form.useForm();
-  const [fileList, setFileList] = useState([]);
-  const [formatValidation, setFormatValidation] = useState({ status: 'idle', message: '请选择数据类型并上传文件夹' });
-  const uploadMode = Form.useWatch('uploadMode', form) || 'newDataset';
-  const modality = Form.useWatch('modality', form);
-  const templateId = Form.useWatch('templateId', form);
-  const templateInfo = UPLOAD_TEMPLATE_BY_MODALITY[modality];
-  const selectedTemplate = PUBLISHED_TEMPLATE_PROFILES.find(item=>item.id===templateId);
-  useEffect(() => {
-    let active = true;
-    if (!modality || !templateId || !fileList.length) {
-      setFormatValidation({ status: 'idle', message: !modality ? '请先选择数据类型' : !templateId ? '请选择已发布模板' : '选择文件夹后将按模板契约自动校验格式' });
-      return () => { active = false; };
-    }
-    setFormatValidation({ status: 'checking', message: '正在校验文件夹结构和数据格式…' });
-    validateUploadFolder(modality, fileList).then(result => { if (active) setFormatValidation(result); });
-    return () => { active = false; };
-  }, [modality, templateId, fileList]);
-  const submit = async () => {
-    try {
-      if (formatValidation.status !== 'passed') { message.warning('文件夹格式校验通过后才可上传'); return; }
-      const values = await form.validateFields();
-      if (!fileList.length) { message.warning('请选择包含数据文件的文件夹'); return; }
-      onSubmit({ ...values, fileList });
-      form.resetFields(); setFileList([]); setFormatValidation({ status: 'idle', message: '请选择数据类型并上传文件夹' });
-    } catch { /* validation message is shown by Form */ }
+function UploadDatasetPage({ onCancel, onSubmit, datasets, editing }) {
+  const [form]=Form.useForm();
+  const [fileList,setFileList]=useState(()=>editing?.version.uploadFiles||[]);
+  const [metadata,setMetadata]=useState({status:'idle',detected:[]});
+  const [pendingUpload,setPendingUpload]=useState(null),[uploadProgress,setUploadProgress]=useState(0);
+  const modality=Form.useWatch('modality',form)||'文档图像';
+  const uploadMode=Form.useWatch('uploadMode',form)||'newDataset';
+  const templateId=Form.useWatch('templateId',form);
+  const targetName=Form.useWatch('targetDataset',form);
+  const name=Form.useWatch('name',form);
+  const target=(datasets||[]).find(d=>d.name===targetName);
+  const options=templatesForModality(modality);
+  const selectedTemplate=options.find(t=>t.id===templateId);
+  const maxBytes=modality==='文档图像'?2*1024**3:500*1024**2;
+  const limitLabel=modality==='文档图像'?'2 GB':'500 MB';
+  const totalBytes=fileList.reduce((sum,f)=>sum+Number(f.size||0),0);
+  const overLimit=totalBytes>maxBytes;
+  const templateInfo=UPLOAD_TEMPLATE_BY_MODALITY[modality];
+  useEffect(()=>{
+    let active=true;
+    if(!fileList.length||overLimit){setMetadata({status:'idle',detected:[]});return;}
+    if(editing&&!fileList.some(f=>f.originFileObj)){setMetadata({status:'idle',detected:[]});return;}
+    setMetadata({status:'checking',detected:[]});
+    detectUploadMetadata(fileList,templatesForModality(modality)).then(result=>{
+      if(!active)return;setMetadata(result);
+      if(form.getFieldValue('uploadMode')!=='newVersion')form.setFieldValue('templateId',result.templateId||undefined);
+    });
+    return ()=>{active=false;};
+  },[fileList,modality,overLimit,form]);
+  useEffect(()=>{
+    if(uploadMode==='newVersion')form.setFieldsValue({templateId:target?.templateId,name:target?.name});
+  },[uploadMode,targetName,target?.templateId,form]);
+  useEffect(()=>{
+    if(!pendingUpload)return;
+    const timer=setInterval(()=>setUploadProgress(v=>Math.min(100,v+10)),250);
+    return ()=>clearInterval(timer);
+  },[pendingUpload]);
+  useEffect(()=>{
+    if(!pendingUpload||uploadProgress<100)return;
+    setPendingUpload(null);onSubmit(pendingUpload);
+  },[pendingUpload,uploadProgress,onSubmit]);
+  const reason=!fileList.length?'请选择压缩包':overLimit?'压缩包总大小超过上限':metadata.status==='checking'?'正在检测上传元数据':uploadMode==='newVersion'&&!target?'请选择目标数据集':!String(name||'').trim()?'请填写数据集名称':!selectedTemplate?'请选择已发布模板':'';
+  const submit=async(publishAfterSave=false)=>{
+    if(reason||pendingUpload)return;
+    try{const values=await form.validateFields();setUploadProgress(0);
+      // Only trusted form references and package descriptors cross the submission boundary.
+      setPendingUpload({...values,publishAfterSave,name:uploadMode==='newVersion'?target.name:values.name,fileList:fileList.map(f=>({name:f.name,size:f.size})),discardedMetadata:true});
+    }catch{}
   };
-  const downloadTemplate = type => {
-    const examples = {
-      document: { name: 'document-image-upload-template.json', type: '文档图像', files: ['images/sample-001.png'], annotations: ['annotations/sample-001.json'] },
-      conversation: { name: 'conversation-upload-template.jsonl', text: JSON.stringify({ id: 'dialogue-001', messages: [{ role: 'user', content: '示例问题' }, { role: 'assistant', content: '示例回答' }] }) },
-      timeseries: { name: 'timeseries-upload-template.csv', text: 'series_id,timestamp,value,label\nseries-001,2026-08-01 00:00:00,4.2,normal\n' },
-    };
-    const example = examples[type];
-    const content = example.text || JSON.stringify(example, null, 2);
-    const blob = new Blob([content], { type: type === 'timeseries' ? 'text/csv;charset=utf-8' : 'application/json;charset=utf-8' });
-    const url = URL.createObjectURL(blob);
-    const anchor = document.createElement('a');
-    anchor.href = url;
-    anchor.download = example.name;
-    document.body.appendChild(anchor);
-    anchor.click();
-    anchor.remove();
-    URL.revokeObjectURL(url);
-    message.success('上传模板已生成');
-  };
+  const matchText={checking:'正在检测 manifest、lineage、quality…',matched:'已匹配系统中的已发布模板',absent:'未检测到模板元数据，请手动关联',unmatched:'未匹配到相同 ID 的模板，请手动关联',warning:'部分元数据无法解析，请手动关联'};
   return <div className="create-task-page dataset-upload-page">
-    <Flex justify="space-between" align="center" className="create-page-heading"><Space><Button type="text" shape="circle" icon={<LeftOutlined/>} aria-label="返回数据中心" onClick={onCancel}/><Title level={3}>上传数据集</Title></Space><Button type="primary" icon={<CloudUploadOutlined/>} disabled={formatValidation.status !== 'passed'} onClick={submit}>上传并处理</Button></Flex>
-    <Card>
-      <Alert type="info" showIcon message="上传后自动执行入库隐私检查与脱敏" description="该检查只负责入库安全，不等同于模板正式质检；系统只保存脱敏后的数据，不保存原始数据。" style={{ marginBottom: 16 }}/>
-      <Form form={form} layout="vertical">
-      <Form.Item name="modality" label="数据类型" rules={[{ required: true, message: '请选择数据类型' }]}>
-        <Radio.Group optionType="button" buttonStyle="solid" onChange={()=>{form.setFieldsValue({templateId:undefined,targetDataset:undefined});setFileList([]);}} options={[{ label: '文档类图像', value: '文档图像' }, { label: '对话', value: '对话文本' }, { label: '时序', value: '时序数据' }]} />
-      </Form.Item>
-      <Flex align="center" wrap="wrap" gap={6} className="dataset-upload-template-tip"><Text type="secondary">{templateInfo ? templateInfo.hint : '选择数据类型后，可下载对应的文件夹结构与数据格式模板。'}</Text>{templateInfo && <Button type="link" size="small" onClick={() => downloadTemplate(templateInfo.key)}>下载{templateInfo.label}模板</Button>}</Flex>
-      <Form.Item name="templateId" label="绑定已发布模板" rules={[{required:true,message:'请选择已发布模板'}]}><Select showSearch optionFilterProp="label" disabled={!modality} placeholder="模板用于格式校验、正式质检和后续血缘追溯" options={templatesForModality(modality).map(template=>({value:template.id,label:`${template.name} · ${template.businessType} · ${template.version}`}))}/></Form.Item>
-      {selectedTemplate&&<TemplateSnapshot template={selectedTemplate}/>} 
-      <Form.Item name="uploadMode" label="上传方式" initialValue="newDataset" className="section-title">
-        <Radio.Group optionType="button" buttonStyle="solid" options={[{ label: '创建新数据集', value: 'newDataset' }, { label: '上传为已有数据集新版本', value: 'newVersion' }]} />
-      </Form.Item>
-      {uploadMode === 'newVersion' && <Form.Item name="targetDataset" label="目标数据集" rules={[{ required: true, message: '请选择目标数据集' }]}><Select showSearch optionFilterProp="label" options={(datasets || []).filter(dataset=>dataset.modality===modality&&dataset.templateId===templateId).map(d => ({ label: `${d.name}（当前${d.defaultVersion}）`, value: d.name }))} placeholder="仅显示数据类型、业务类型和模板契约一致的数据集" /></Form.Item>}
-      <Form.Item name="name" label="数据集名称" rules={[{ required: true, message: '请输入数据集名称' }]}><Input placeholder="例如：客户上传的报关单样本" /></Form.Item>
-      <Form.Item name="description" label="描述"><Input.TextArea rows={2} placeholder="说明数据来源、用途或版本信息" /></Form.Item>
-      <Form.Item label="数据文件夹" required>
-        <Upload directory multiple beforeUpload={() => false} fileList={fileList} onChange={({ fileList: next }) => setFileList(next)} showUploadList={{ showRemoveIcon: true }}>
-          <Button icon={<CloudUploadOutlined/>}>选择文件夹</Button>
-        </Upload>
-        <Text type="secondary">请选择与当前数据类型模板一致的完整文件夹，选择后系统会自动执行格式校验。</Text>
-      </Form.Item>
-      {formatValidation.status === 'checking' && <Alert type="info" showIcon message={formatValidation.message}/>} 
-      {formatValidation.status === 'passed' && <Alert type="success" showIcon message={formatValidation.message} description="格式校验已通过，可以上传并进入隐私检查与自动脱敏。"/>}
-      {formatValidation.status === 'failed' && <Alert type="error" showIcon message="格式校验未通过" description={<ul className="dataset-upload-validation-errors">{formatValidation.errors.map(error => <li key={error}>{error}</li>)}</ul>}/>} 
-      </Form>
-    </Card>
+    <Flex justify="space-between" align="center" className="create-page-heading"><Space><Button type="text" shape="circle" icon={<LeftOutlined/>} aria-label="返回数据中心" onClick={onCancel}/><Title level={3}>上传数据集</Title></Space><Space><Button disabled={!!pendingUpload} onClick={onCancel}>取消</Button><Button loading={!!pendingUpload&&!pendingUpload.publishAfterSave} disabled={!!reason||!!pendingUpload} onClick={()=>submit(false)}>保存草稿</Button><Button type="primary" loading={!!pendingUpload&&pendingUpload.publishAfterSave} disabled={!!reason||!!pendingUpload} onClick={()=>submit(true)}>保存并发布</Button></Space></Flex>
+    <Card><Form form={form} layout="vertical" disabled={!!pendingUpload} initialValues={editing?{modality:editing.dataset.modality,uploadMode:'newDataset',name:editing.dataset.name,description:editing.version.note,templateId:editing.version.templateId}:{modality:'文档图像',uploadMode:'newDataset'}}>
+      <Title level={5}>上传数据</Title>
+      <Form.Item name="modality" label="数据类型" rules={[{required:true}]}><Radio.Group disabled={!!editing||!!pendingUpload} optionType="button" buttonStyle="solid" onChange={()=>{form.setFieldsValue({templateId:undefined,targetDataset:undefined});setFileList([]);}} options={[{label:'文档类图像',value:'文档图像'},{label:'对话',value:'对话文本'},{label:'时序',value:'时序数据'}]}/></Form.Item>
+      <Form.Item label="数据压缩包" required><Space align="start" wrap><Upload accept=".zip" multiple beforeUpload={file=>{if(!/\.zip$/i.test(file.name)||!file.size){message.error('请选择非空 ZIP 压缩包');return Upload.LIST_IGNORE;}return false;}} fileList={fileList} onChange={({fileList:next})=>setFileList(next)} showUploadList={{showRemoveIcon:!pendingUpload}}><Button icon={<CloudUploadOutlined/>}>选择压缩包</Button></Upload><Button type="link" onClick={async()=>{try{await downloadDatasetExample(templateInfo.key,'upload');message.success('上传模板已开始下载');}catch(e){message.error(e.message);}}}>下载示例 ZIP</Button></Space><div><Text type="secondary">支持多个 ZIP，合计不超过 {limitLabel}。发布前检查文件、隐私及安全；发现问题后由你选择删除、重新上传或配置脱敏。</Text></div><div><Text type="secondary">如果上传的压缩包中包含本平台下载数据集时的manifest、lineage、quality文件，上传时仅用于检测模板线索，不保存，也不沿用其中的血缘或质检结果。</Text></div></Form.Item>
+      {!!fileList.length&&<div style={{marginBottom:16}}><Text type={overLimit?'danger':'secondary'}>已选择 {fileList.length} 个压缩包，共 {(totalBytes/1024**2).toFixed(2)} MB / {limitLabel}{overLimit?'，请移除部分文件':''}</Text>{pendingUpload&&<Progress percent={uploadProgress}/>}</div>}
+      <Divider/><Title level={5}>保存设置</Title>
+      <Form.Item name="uploadMode" label="保存方式" hidden={!!editing}><Radio.Group optionType="button" buttonStyle="solid" onChange={()=>{form.setFieldsValue({targetDataset:undefined,name:undefined,templateId:metadata.templateId||undefined});}} options={[{label:'创建新数据集',value:'newDataset'},{label:'已有数据集新版本',value:'newVersion'}]}/></Form.Item>
+      {uploadMode==='newVersion'&&<Form.Item name="targetDataset" label="目标数据集" rules={[{required:true,message:'请选择目标数据集'}]}><Select showSearch optionFilterProp="label" placeholder="选择目标数据集" options={(datasets||[]).filter(d=>d.modality===modality||modality==='文档图像'&&d.modality==='文档类图像').map(d=>({value:d.name,label:d.name}))}/></Form.Item>}
+      <Form.Item name="name" label="数据集名称" rules={[{required:true,whitespace:true,message:'请填写数据集名称'}]}><Input disabled={uploadMode==='newVersion'||!!pendingUpload} placeholder="请输入数据集名称"/></Form.Item>
+      <Form.Item name="description" label={uploadMode==='newVersion'?'版本描述':'数据集描述'}><Input.TextArea placeholder="请输入描述" rows={2}/></Form.Item>
+      <Divider/><Title level={5}>关联模板</Title>
+      {metadata.status!=='idle'&&metadata.status!=='conflict'&&<div style={{marginBottom:12}}><Text type="secondary">{matchText[metadata.status]}{metadata.templateId&&uploadMode==='newVersion'?'；使用目标数据集的模板':''}</Text></div>}
+      <Form.Item name="templateId" label="绑定已发布模板" rules={[{required:true,message:'请选择已发布模板'}]}><Select showSearch optionFilterProp="label" disabled={uploadMode==='newVersion'||!!editing?.version.sourceVersionId||!!pendingUpload||metadata.status==='checking'} placeholder="请选择已发布模板" options={options.map(t=>({value:t.id,label:t.name}))}/></Form.Item>
+      {selectedTemplate&&<Descriptions bordered size="small" column={2} items={[
+        {key:'name',label:'模板名称',children:selectedTemplate.name},
+        {key:'id',label:'模板 ID',children:<Text copyable>{selectedTemplate.id}</Text>},
+        {key:'business',label:'业务类型',children:selectedTemplate.businessType||'-'},
+        {key:'method',label:'模板制作方式',children:selectedTemplate.method||'-'},
+        {key:'description',label:'描述',span:2,children:selectedTemplate.description||selectedTemplate.desc||'暂无描述'},
+      ]}/>}
+    </Form></Card>
   </div>;
 }
 
 const percentText = value => Number.isFinite(Number(value)) ? `${(Number(value) * 100).toFixed(2)}%` : '-';
 
 function QualityStatusSummary({ counts = {}, total = 0 }) {
-  const colors = { PASS: '#52c41a', REVIEW: '#faad14', REJECT: '#ff4d4f', UNCHECKED:'#8c8c8c' };
-  const labels = { PASS:'PASS', REVIEW:'REVIEW', REJECT:'REJECT', UNCHECKED:'未质检' };
-  const statuses=Number(counts.UNCHECKED||0)>0?['PASS','REVIEW','REJECT','UNCHECKED']:['PASS','REVIEW','REJECT'];
-  return <Row gutter={[12,12]}>{statuses.map(status=><Col span={statuses.length===4?6:8} key={status}><Card size="small"><Flex justify="space-between" align="center"><div><Text type="secondary">{labels[status]}</Text><Title level={4} style={{margin:'4px 0 0',color:colors[status]}}>{Number(counts[status] || 0).toLocaleString()}</Title></div><Progress type="circle" size={54} percent={total?Math.round(Number(counts[status]||0)/total*100):0} strokeColor={colors[status]}/></Flex></Card></Col>)}</Row>;
+  const colors = { ERROR:'#cf1322', PASS: '#52c41a', REVIEW: '#faad14', REJECT: '#ff4d4f', UNCHECKED:'#8c8c8c' };
+  const labels = { ERROR:'质检异常', PASS:'PASS', REVIEW:'REVIEW', REJECT:'REJECT', UNCHECKED:'未质检' };
+  const statuses=['PASS','REVIEW','REJECT',...(counts.ERROR?['ERROR']:[]),...(counts.UNCHECKED?['UNCHECKED']:[])];
+  return <Row gutter={[12,12]}>{statuses.map(status=><Col flex={`${100/statuses.length}%`} key={status}><Card size="small"><Flex justify="space-between" align="center"><div><Text type="secondary">{labels[status]}</Text><Title level={4} style={{margin:'4px 0 0',color:colors[status]}}>{Number(counts[status] || 0).toLocaleString()}</Title></div><Progress type="circle" size={54} percent={total?Math.round(Number(counts[status]||0)/total*100):0} strokeColor={colors[status]}/></Flex></Card></Col>)}</Row>;
 }
 
-function VersionQualityReport({ dataset, version }) {
-  const report = buildVersionQualityReport(dataset.modality, version);
-  if (!report) return <Empty description="该版本尚未生成质检报告"/>;
-  const total = report.sampleCount ?? report.shipmentCount ?? numericSampleCount(version.samples);
-  const checkedSampleCount=report.checkedSampleCount??Math.max(0,total-Number(report.statusCounts?.UNCHECKED||0));
-  const uncheckedSampleCount=report.uncheckedSampleCount??Number(report.statusCounts?.UNCHECKED||0);
-  const statusSection = <><Alert type={Number(report.statusCounts?.REJECT||0)?'warning':'success'} showIcon message={`${report.executionRange==='sample'?'部分抽检':'全量质检'}完成，共检查 ${Number(checkedSampleCount).toLocaleString()} 条数据`} description={`当前版本共 ${Number(total).toLocaleString()} 条：PASS ${Number(report.statusCounts?.PASS||0).toLocaleString()}，REVIEW ${Number(report.statusCounts?.REVIEW||0).toLocaleString()}，REJECT ${Number(report.statusCounts?.REJECT||0).toLocaleString()}，未质检 ${Number(uncheckedSampleCount).toLocaleString()}。`}/><div className="section-title"><QualityStatusSummary counts={report.statusCounts} total={total}/></div></>;
-  if (dataset.modality === '文档图像') return <>{statusSection}<Title level={5}>核心识别指标</Title><Descriptions bordered size="small" column={3} items={[
-    {key:'cer',label:'CER',children:Number(report.ocrAverages.cer).toFixed(4)},
-    {key:'exact',label:'字段完全一致率',children:percentText(report.ocrAverages.fieldExactRate)},
-    {key:'numeric',label:'数字代码准确率',children:percentText(report.ocrAverages.numericCodeAccuracy)},
-    {key:'coverage',label:'检测覆盖率',children:percentText(report.ocrAverages.detectionCoverage)},
-    {key:'confidence',label:'平均识别置信度',children:percentText(report.ocrAverages.meanRecognitionConfidence)},
-    {key:'low',label:'低置信字段率',children:percentText(report.ocrAverages.lowConfidenceRate)},
-  ]}/><Title level={5} className="section-title">图片与几何质量</Title><Descriptions bordered size="small" column={3} items={[
-    {key:'brightness',label:'平均亮度',children:report.imageQuality.brightness},
-    {key:'contrast',label:'平均对比度',children:report.imageQuality.contrast},
-    {key:'sharpness',label:'平均清晰度',children:report.imageQuality.sharpness},
-    {key:'polygon',label:'有效 polygon',children:percentText(report.geometry.validPolygonRate)},
-    {key:'bbox',label:'最大几何误差',children:`${report.geometry.bboxPolygonErrorPx} px`},
-    {key:'rmse',label:'重投影 RMSE',children:`${report.geometry.reprojectionRmsePx} px`},
-    {key:'bounds',label:'最大越界比例',children:percentText(report.geometry.outOfBoundsRate)},
-    {key:'p10',label:'字段高度 P10',children:`${report.geometry.fieldHeightP10Px} px`},
-    {key:'median',label:'字段高度中位数',children:`${report.geometry.fieldHeightMedianPx} px`},
-  ]}/><Title level={5} className="section-title">隐私检查与自动脱敏</Title><Descriptions bordered size="small" column={3} items={[
-    {key:'initial',label:'初检隐私风险',children:report.privacy.initialRiskCount},{key:'masked',label:'自动脱敏',children:report.privacy.maskedCount},{key:'residual',label:'复检残留风险',children:report.privacy.residualRiskCount},
-  ]}/><Title level={5} className="section-title">标签覆盖缺口</Title><Table rowKey="key" size="small" pagination={false} dataSource={report.coverageGaps||[]} columns={[{title:'维度',dataIndex:'dimension'},{title:'标签',dataIndex:'label'},{title:'当前 PASS',dataIndex:'pass'},{title:'目标',dataIndex:'target'},{title:'缺口',dataIndex:'gap'}]}/></>;
-  if (dataset.modality === '对话文本') return <>{statusSection}
-    <Title level={5}>五类质检结果</Title><Row gutter={[12,12]}>{(report.categorySummary||[]).map(item=><Col span={Math.max(4,Math.floor(24/Math.max((report.categorySummary||[]).length,1)))} key={item.key}><Card size="small"><Text type="secondary">{item.label}</Text><div><Text strong>{item.ruleCount} 项</Text></div><Space size={4} wrap><Tag color="green">PASS {item.pass||0}</Tag>{Boolean(item.review)&&<Tag color="orange">REVIEW {item.review}</Tag>}{Boolean(item.reject)&&<Tag color="red">REJECT {item.reject}</Tag>}{Boolean(item.info)&&<Tag color="blue">INFO {item.info}</Tag>}</Space></Card></Col>)}</Row>
-    {(report.evaluatorErrors||[]).length>0&&<Alert className="section-title" type="error" showIcon message="检测器执行错误，不能按 PASS 处理" description={(report.evaluatorErrors||[]).map(item=>item.message).join('；')}/>}
-    <Title level={5} className="section-title">核心质量指标</Title><Row gutter={[12,12]}>
-      <Col span={6}><Card size="small"><Statistic title="Schema 合法率" value={percentText(report.schemaValidRate)}/></Card></Col>
-      <Col span={6}><Card size="small"><Statistic title="状态转移合法率" value={percentText(report.stateLegalRate)}/></Card></Col>
-      <Col span={6}><Card size="small"><Statistic title="工具调用准确率" value={percentText(report.toolAccuracyRate)}/></Card></Col>
-      <Col span={6}><Card size="small"><Statistic title="证据可解析率" value={percentText(report.evidenceResolvableRate)}/></Card></Col>
-      <Col span={6}><Card size="small"><Statistic title="角色稳定率" value={percentText(report.roleStableRate)}/></Card></Col>
-      <Col span={6}><Card size="small"><Statistic title="非重复样本率" value={percentText(report.nonDuplicateRate)}/></Card></Col>
-    </Row>
-    <Title level={5} className="section-title">基础统计（按作用域）</Title><Table rowKey="key" size="small" pagination={false} dataSource={report.basicStatistics||[]} columns={[{title:'作用域',dataIndex:'scope'},{title:'平均有效字符',dataIndex:'charsAvg'},{title:'P95 字符',dataIndex:'charsP95'},{title:'平均词数',dataIndex:'wordsAvg'},{title:'超长句占比',dataIndex:'longSentenceRate',render:percentText}]}/>
-    <Title level={5} className="section-title">对话与事件 / 证据指标</Title><Descriptions bordered size="small" column={4} items={[
-      {key:'context',label:'Context Relevancy',children:`${report.ragMetrics?.contextRelevancy??'-'} / 10`},
-      {key:'answer',label:'Answer Relevancy',children:`${report.ragMetrics?.answerRelevancy??'-'} / 10`},
-      {key:'faithfulness',label:'Faithfulness',children:`${report.ragMetrics?.faithfulness??'-'} / 10`},
-      {key:'threshold',label:'通过阈值',children:`≥ ${report.ragMetrics?.threshold??7}`},
-    ]}/>
-    <Title level={5} className="section-title">隐私质检与自动脱敏</Title><Descriptions bordered size="small" column={4} items={[
-      {key:'initial',label:'初检隐私风险',children:report.privacy.initialRiskCount},
-      {key:'masked',label:'自动脱敏',children:report.privacy.maskedCount},
-      {key:'residual',label:'复检残留风险',children:report.privacy.residualRiskCount},
-      {key:'raw',label:'报告输出原文',children:report.privacy.rawValueExported?'是':'否'},
-      {key:'types',label:'类型分布',span:4,children:Object.entries(report.privacy.typeCounts||{}).map(([key,value])=><Tag key={key}>{key} · {value}</Tag>)},
-    ]}/>
-    <Title level={5} className="section-title">标签覆盖缺口</Title><Table rowKey="key" size="small" pagination={false} dataSource={report.coverageGaps||[]} columns={[{title:'维度',dataIndex:'dimension'},{title:'标签',dataIndex:'label'},{title:'当前 PASS',dataIndex:'pass'},{title:'目标',dataIndex:'target'},{title:'缺口',dataIndex:'gap'}]}/>
-  </>;
-  const dimensionLabels = { contract:'字段契约', temporal:'时间连续性', physical:'温湿度物理规则', geospatial:'GPS 与运输阶段', ground_truth:'事件与 Ground Truth', privacy:'隐私契约', template_rules:'模板字段规则', coverage_labels:'覆盖标签一致性' };
-  return <>{statusSection}<Row gutter={[12,12]} className="section-title"><Col span={8}><Card size="small"><Statistic title="平均质量分" value={report.averageScore} suffix="/100"/></Card></Col><Col span={8}><Card size="small"><Statistic title="PASS 标签覆盖率" value={report.coverageScore} suffix="%"/></Card></Col><Col span={8}><Card size="small"><Statistic title="低质数据" value={report.lowQualityCount}/></Card></Col></Row><Title level={5}>各维度平均得分</Title><Table size="small" pagination={false} rowKey="key" dataSource={Object.entries(report.dimensionScores).map(([key,value])=>({key,name:dimensionLabels[key]||key,value}))} columns={[{title:'质检维度',dataIndex:'name'},{title:'得分',dataIndex:'value',width:140,render:value=><Progress percent={value} size="small"/>}]}/><Title level={5} className="section-title">单位与字段契约</Title><Descriptions bordered size="small" column={3} items={[{key:'temp',label:'温度单位',children:report.units.temperature},{key:'interval',label:'采样间隔',children:`${report.units.sampleIntervalMinutes} 分钟`},{key:'humidity',label:'湿度单位',children:report.units.humidity}]}/><Title level={5} className="section-title">隐私质检</Title><Descriptions bordered size="small" column={3} items={[{key:'checked',label:'检查数据',children:report.privacy.checkedSampleCount},{key:'failed',label:'失败数据',children:report.privacy.failedSampleCount},{key:'status',label:'结果分布',children:Object.entries(report.privacy.statusCounts||{}).map(([key,value])=><Tag key={key}>{key} · {value}</Tag>)}]}/></>;
+function VersionQualityReport({ dataset, version, fixedReport=false }) {
+  const reports=useMemo(()=>fixedReport?qualityReports(version):versionReportsForDisplay(dataset,version),[dataset,version,fixedReport]);
+  const [reportId,setReportId]=useState(null);
+  useEffect(()=>setReportId(null),[version.version,reports[0]?.reportId]);
+  const preferred=preferredQualityReport(reports);
+  const report=reports.find(item=>item.reportId===reportId)||preferred;
+  return <>{!fixedReport&&reports.length>0&&<Select placeholder="请选择选择质检报告" aria-label="选择质检报告" style={{width:'100%',marginBottom:16}} value={report?.reportId} onChange={setReportId} options={reports.map(item=>({value:item.reportId,label:`${item.reportId} · ${item.createdAt||'-'}${item.reportId===preferred?.reportId?'（默认）':''}`}))}/>}<VersionQualityReportContent dataset={dataset} version={versionWithReport(version,fixedReport?version.qualityReport:report)}/></>;
+}
+
+function VersionQualityReportContent({dataset,version}){
+  return <RuleQualityReport key={version.qualityReport?.reportId||version.version} report={version.qualityReport}/>;
 }
 
 function DownstreamTaskDetailPage({ task, dataset, version }) {
+  const actual=readStore('application-state',{}).tasks?.find(item=>item.id===task?.id);
+  if(actual?.configSnapshot)return <main className="standalone-task-detail"><Title level={3}>{actual.name}</Title><Card><ProductTaskDetail task={actual}/></Card></main>;
   if (!task) return <main className="standalone-task-detail"><Empty description="未找到下游任务记录"/><Button onClick={()=>window.close()}>关闭页面</Button></main>;
   return <main className="standalone-task-detail"><Flex justify="space-between" align="center"><div><Text type="secondary">下游任务详情</Text><Title level={2}>{task.name}</Title></div><Button onClick={()=>window.close()}>关闭页面</Button></Flex><Card><Descriptions bordered column={2} items={[
     {key:'name',label:'任务名称',children:task.name},{key:'id',label:'任务 ID',children:<Text copyable>{task.id}</Text>},
@@ -2054,14 +2127,29 @@ function DownstreamTaskDetailPage({ task, dataset, version }) {
   ]}/></Card></main>;
 }
 
-function DataCenter({ datasets, setDatasets, uploading, onUploadingChange, onStartTask }) {
+function DataCenter({ tasks, datasets, setDatasets, uploading, onUploadingChange, onStartTask }) {
+  const [downloading,setDownloading]=useState(null);
+  const [editingUpload,setEditingUpload]=useState(null);
   const [modality,setModality]=useState('全部');
   const [sourceFilter,setSourceFilter]=useState('全部');
   const [businessTypeFilter,setBusinessTypeFilter]=useState('全部');
   const [query,setQuery]=useState('');
   const [detail,setDetail]=useState(null);
+  const [uploadPanelVersion,setUploadPanelVersion]=useState(null);
+  const uploadPanelVersions=(detail?.versions||[]).filter(v=>v.sourceType==='用户上传').slice().sort((a,b)=>String(b.created||'').localeCompare(String(a.created||'')));
+  const displayedUploadVersion=uploadPanelVersions.find(v=>v.version===uploadPanelVersion)||uploadPanelVersions[0];
   const [versionDetail,setVersionDetail]=useState(null);
   const [sourceTaskDetail,setSourceTaskDetail]=useState(null);
+  const [linkedDatasetOpened,setLinkedDatasetOpened]=useState(false);
+  useEffect(()=>{
+    const id=new URLSearchParams(window.location.search).get('datasetDetail');
+    if(!id||linkedDatasetOpened)return;
+    const dataset=datasets.find(item=>String(item.id)===id);
+    if(dataset){setDetail(dataset);setLinkedDatasetOpened(true);}
+  },[datasets,linkedDatasetOpened]);
+  const uploadTaskVersion=datasets.flatMap(d=>d.versions).find(v=>v.source===sourceTaskDetail?.id&&v.sourceType==='用户上传');
+  useEffect(()=>{setDetail(c=>c?datasets.find(d=>d.id===c.id)||null:null);setVersionDetail(c=>{if(!c)return null;const dataset=datasets.find(d=>d.id===c.dataset.id),version=dataset?.versions.find(v=>v.version===c.version.version);return version?{...c,dataset,version}:null;});},[datasets]);
+  const resolveTask=value=>tasks?.find(task=>task.id===value?.id);
   const [descriptionEditing,setDescriptionEditing]=useState(false);
   const [descriptionDraft,setDescriptionDraft]=useState('');
 
@@ -2071,69 +2159,90 @@ function DataCenter({ datasets, setDatasets, uploading, onUploadingChange, onSta
     setVersionDetail(current=>current?.dataset.id===datasetId?{...current,dataset:updater(current.dataset),version:updater(current.dataset).versions.find(item=>item.id===current.version.id)||current.version}:current);
   };
   const createUploadedDataset = values => {
-    const uploadId = `UPLOAD-${Date.now()}`;
-    const now = nowDateTime();
-    const id = createDatasetId(uploadId, now);
-    const inspectedCount = values.fileList.length;
-    const desensitizedCount = inspectedCount ? Math.max(1, Math.round(inspectedCount * 0.2)) : 0;
-    const privacyReportId=`UPRIV-${fixedHashId(uploadId)}`;
-    const privacyCheck = { reportId:privacyReportId,status:'通过',inspectedCount,sensitiveCount:desensitizedCount,desensitizedCount,recheckStatus:'通过',storagePolicy:'仅保存脱敏后数据',originalRetained:false,findings:['姓名','手机号','证件号'] };
-    const versionId = createVersionId(uploadId);
-    const template=PUBLISHED_TEMPLATE_PROFILES.find(item=>item.id===values.templateId);
-    const version = { id:versionId,version:versionId,note:'用户上传并完成入库隐私检查与自动脱敏',versionKind:'上传脱敏',sourceType:'用户上传',source:uploadId,sourceName:'用户上传处理',uploadJobId:uploadId,uploadPrivacyReportId:privacyReportId,desensitizedSampleCount:desensitizedCount,samples:inspectedCount,updatedAt:now,created:now,consumers:[],privacyCheck,artifactUrl:null,qualityChecked:false,qualityReport:null,qualityReportId:null,sampleQualityLabels:null,templateId:template.id,templateVersion:template.version };
-    if (values.uploadMode === 'newVersion' && values.targetDataset) {
-      setDatasets(items=>items.map(dataset=>dataset.name!==values.targetDataset?dataset:(()=>{const nextVersion={...version,note:values.description||version.note,sourceDatasetId:dataset.id,sourceVersionId:dataset.defaultVersion};return {...dataset,defaultVersion:versionId,totalSamples:numericSampleCount(dataset.totalSamples)+inspectedCount,updatedAt:now,versions:[nextVersion,...dataset.versions]};})()));
-      onUploadingChange(false); message.success(`入库隐私检查与脱敏已完成，已脱敏 ${desensitizedCount} 条数据并创建上传版本`); return;
+    const now=nowDateTime(),template=PUBLISHED_TEMPLATE_PROFILES.find(t=>t.id===values.templateId);
+    if(!template)return;
+    const fields=template.documentSnapshot?.fields||template.configuration?.fields||[];
+    const uploadFieldIds=fields.map(field=>field.field_id||field.id).filter(Boolean);
+    const finishSave=v=>values.publishAfterSave?beginUploadCheck(v):v;
+    const files=values.fileList.map((f,i)=>({...f,uid:String(i)}));
+    const uploadConfigSnapshot={qualityRules:templateQualityRules(values.modality,template),name:values.name,description:values.description,modality:values.modality,uploadMode:values.uploadMode,targetDataset:values.targetDataset,templateId:template.id,templateVersion:template.version,files:files.map(({name,size,type})=>({name,size,type}))};
+    if(editingUpload){
+      updateDataset(editingUpload.dataset.id,d=>({...d,versions:d.versions.map(v=>v.version!==editingUpload.version.version?v:finishSave({...v,note:values.description||'',templateId:template.id,templateVersion:template.version,uploadConfigSnapshot,uploadFieldIds,uploadFiles:files,publicationStatus:'草稿',updatedAt:now,draftSourceRetained:true}))}));
+      if(values.publishAfterSave){setDetail(editingUpload.dataset);setUploadPanelVersion(editingUpload.version.version);}
+      setEditingUpload(null);onUploadingChange(false);message.success(values.publishAfterSave?'已保存，正在进行发布检查':'草稿已保存');return;
     }
-    const dataset = normalizeDatasets([{id,name:values.name,modality:values.modality,businessType:template.businessType,status:'可用',desc:values.description||'用户上传并完成入库隐私检查与自动脱敏的数据集。',defaultVersion:versionId,totalSamples:inspectedCount,reference:false,sourceType:'用户上传',updatedAt:now,templateId:template.id,templateVersion:template.version,versions:[version]}])[0];
-    setDatasets(items=>[dataset,...items]); onUploadingChange(false); message.success(`入库隐私检查与脱敏已完成，已脱敏 ${desensitizedCount} 条数据并创建数据集`);
+    const uploadId='UPLOAD-'+Date.now(),versionId=createVersionId(uploadId),id=createDatasetId(uploadId,now);
+    const v=finishSave({id:versionId,version:versionId,note:values.description||'上传草稿',versionKind:'用户上传',sourceType:'用户上传',source:uploadId,sourceName:'上传任务 · '+values.name,publicationStatus:'草稿',samples:files.length*100,created:now,updatedAt:now,consumers:[],templateId:template.id,templateVersion:template.version,uploadConfigSnapshot,uploadFieldIds,uploadFiles:files,draftSourceRetained:true,uploadRuns:[],qualityChecked:false,qualityReport:null});
+    if(values.uploadMode==='newVersion')setDatasets(items=>items.map(d=>d.name!==values.targetDataset?d:{...d,versions:[{...v,sourceDatasetId:d.id,sourceVersionId:d.defaultVersion},...d.versions],updatedAt:now}));
+    else setDatasets(items=>[{id,name:values.name,modality:values.modality,businessType:template.businessType,desc:values.description||'',sourceType:'用户上传',templateId:template.id,templateVersion:template.version,defaultVersion:versionId,totalSamples:0,updatedAt:now,versions:[v]},...items]);
+    if(values.publishAfterSave){const owner=values.uploadMode==='newVersion'?datasets.find(d=>d.name===values.targetDataset):{id,name:values.name,modality:values.modality,businessType:template.businessType,desc:values.description||'',sourceType:'用户上传',updatedAt:now,versions:[v]};setDetail(owner);setUploadPanelVersion(versionId);}
+    onUploadingChange(false);message.success(values.publishAfterSave?'已保存，正在进行发布检查':'已保存为草稿，可在版本列表发布');
   };
+  const publishUpload=version=>{setUploadPanelVersion(version.version);if(uploadStatus(version)==='待处理')return;Modal.confirm({title:'发布此版本？',content:'将检查文件、隐私和安全，通过后自动发布。',onOk:()=>updateDataset(detail.id,d=>({...d,versions:d.versions.map(v=>v.version===version.version?beginUploadCheck(v):v)}))});};
+  const terminateUpload=version=>Modal.confirm({title:'终止校验？',content:'终止后回到草稿，可编辑后重新发布。',onOk:()=>updateDataset(detail.id,d=>({...d,versions:d.versions.map(v=>v.version===version.version?stopUploadCheck(v):v)}))});
   const datasetBusinessTypeOptions=useMemo(()=>[...new Set(datasets.map(dataset=>dataset.businessType).filter(Boolean))].sort(),[datasets]);
-  const list=datasets.filter(dataset=>(modality==='全部'||dataset.modality===modality)&&(sourceFilter==='全部'||(dataset.sourceType||'任务生成')===sourceFilter)&&(businessTypeFilter==='全部'||dataset.businessType===businessTypeFilter)&&(!query||String(dataset.name||'').includes(query)||String(dataset.id||'').includes(query)||String(dataset.businessType||'').includes(query)));
-  const downloadUrl=(dataset,version)=>version.artifactUrl||`data:application/json;charset=utf-8,${encodeURIComponent(JSON.stringify({dataset:{id:dataset.id,name:dataset.name,type:dataset.modality},version:{id:version.version,kind:version.versionKind,description:version.note,dataCount:numericSampleCount(version.samples),sourceTask:{name:version.sourceName,id:version.source},sourceDatasetVersion:{datasetId:version.sourceDatasetId,versionId:version.sourceVersionId},template:{id:version.templateId,version:version.templateVersion},updatedAt:version.updatedAt}},null,2))}`;
-  const startVersionTask=(dataset,version,taskType)=>Modal.confirm({title:`创建${taskType}任务？`,content:`将锁定“${dataset.name} / ${version.version}”及其模板、质检报告作为任务输入。`,okText:'进入配置',cancelText:'取消',onOk:()=>{setVersionDetail(null);setDetail(null);onStartTask?.(dataset,version,taskType);}});
+  const list=datasets.filter(dataset=>(modality==='全部'||(dataset.modality==='文档类图像'?'文档图像':dataset.modality)===modality)&&(sourceFilter==='全部'||(dataset.sourceType||'任务生成')===sourceFilter)&&(businessTypeFilter==='全部'||dataset.businessType===businessTypeFilter)&&(!query||String(dataset.name||'').includes(query)||String(dataset.id||'').includes(query)||String(dataset.businessType||'').includes(query)));
+  const downloadVersionExample=async(dataset,version)=>{setDownloading(version.version);try{await downloadVersionWithReports(dataset,version);message.success('已开始下载示例 ZIP，包含该版本全部质检报告；样本仍为演示数据');}catch(error){message.error(error.message||'下载失败，请重试');}finally{setDownloading(null);}};
+  const startVersionTask=(dataset,version,taskType)=>Modal.confirm({title:`创建${taskType}任务？`,content:taskType==='数据质检'?`将对“${dataset.name} / ${version.version}”执行质检，结果保存在该版本中。`:`将使用“${dataset.name} / ${version.version}”，可在配置页选择质检报告。`,okText:'进入配置',cancelText:'取消',onOk:()=>{setVersionDetail(null);setDetail(null);onStartTask?.(dataset,version,taskType);}});
   const taskDetailUrl=(dataset,version,task)=>{const params=new URLSearchParams({downstreamTask:task.id,datasetId:String(dataset.id),versionId:version.version});return `${window.location.pathname}?${params.toString()}`;};
-  const deleteVersion=(dataset,version)=>Modal.confirm({title:`删除 ${dataset.name} / ${version.version}？`,icon:<ExclamationCircleOutlined/>,width:580,content:<Alert type="error" showIcon message="删除后将永久移除该版本的数据、预览、报告和下游任务关联。历史任务仍保留，但对应版本将显示为“已删除”。此操作不可恢复。"/>,okText:'确认删除版本',okType:'danger',cancelText:'取消',onOk:()=>{updateDataset(dataset.id,current=>{const versions=current.versions.filter(item=>item.id!==version.id);return {...current,versions,defaultVersion:current.defaultVersion===version.version?(versions[0]?.version||'-'):current.defaultVersion,updatedAt:versions[0]?.updatedAt||current.updatedAt};});setVersionDetail(null);message.success('数据集版本已删除');}});
+  const deleteVersion=(dataset,version)=>uploadStatus(version)==='校验中'?message.warning('请先终止校验'):Modal.confirm({title:`删除 ${dataset.name} / ${version.version}？`,icon:<ExclamationCircleOutlined/>,width:580,content:<Alert type="error" showIcon message="删除后将永久移除该版本的数据、预览、报告和下游任务关联。历史任务仍保留，但对应版本将显示为“已删除”。此操作不可恢复。"/>,okText:'确认删除版本',okType:'danger',cancelText:'取消',onOk:()=>{updateDataset(dataset.id,current=>{const versions=current.versions.filter(item=>item.id!==version.id);return {...current,versions,defaultVersion:current.defaultVersion===version.version?(versions[0]?.version||'-'):current.defaultVersion,updatedAt:versions[0]?.updatedAt||current.updatedAt};});setVersionDetail(null);message.success('数据集版本已删除');}});
   const deleteDataset=dataset=>Modal.confirm({title:'是否删除该数据集及所有版本？',icon:<ExclamationCircleOutlined/>,width:600,content:<><Paragraph>数据集“<Text strong>{dataset.name}</Text>”包含 <Text strong>{dataset.versions.length}</Text> 个不可变版本。</Paragraph><Alert type="error" showIcon message="确认后将删除数据集及其全部版本，此操作不可恢复。"/></>,okText:'删除全部版本',okType:'danger',cancelText:'取消',onOk:()=>{setDatasets(items=>items.filter(item=>item.id!==dataset.id));setDetail(null);message.success('数据集及其全部版本已删除');}});
   const saveDescription=()=>{const next=descriptionDraft.trim();if(!next){message.warning('数据集描述不能为空');return;}updateDataset(detail.id,dataset=>({...dataset,desc:next,updatedAt:nowDateTime()}));setDescriptionEditing(false);message.success('数据集描述已更新');};
   const datasetColumns=[
     {title:'数据集名称 / ID',dataIndex:'name',width:260,render:(value,row)=><div><Button type="link" className="name-link" onClick={()=>setDetail(row)}>{value}</Button><div className="muted-id">{row.id}</div></div>},
-    {title:'数据类型',dataIndex:'modality',width:120,render:value=><Tag color={modalityColor[value]}>{value}</Tag>},
+    {title:'数据类型',dataIndex:'modality',width:120,render:value=>value==='文档类图像'?'文档图像':value},
     {title:'业务类型',dataIndex:'businessType',width:130},{title:'来源',dataIndex:'sourceType',width:120},{title:'版本数',width:110,render:(_,row)=>row.versions?.length??0},
     {title:'总样本数',dataIndex:'totalSamples',width:130,render:value=>numericSampleCount(value).toLocaleString()},{title:'更新时间',width:185,render:(_,row)=>formatDateTime(row.updatedAt||row.versions?.[0]?.updatedAt)},
     {title:'操作',fixed:'right',width:130,render:(_,row)=><Space size={0}><Button type="link" size="small" onClick={()=>setDetail(row)}>详情</Button><Button type="link" size="small" danger onClick={()=>deleteDataset(row)}>删除</Button></Space>},
   ];
   const versionColumns=detail?[
-    {title:'版本 ID',dataIndex:'version',width:150,render:value=><Text code copyable>{value}</Text>},{title:'版本描述',dataIndex:'note',width:230},{title:'数据量',dataIndex:'samples',width:120,render:value=>numericSampleCount(value).toLocaleString()},
-    {title:'来源任务',width:230,render:(_,version)=>version.sourceType==='用户上传'?'-':<Button type="link" className="trace-link" onClick={()=>setSourceTaskDetail({id:version.source,name:version.sourceName,taskType:version.versionKind,updatedAt:version.updatedAt,inputVersionId:version.sourceVersionId,outputVersionId:version.version})}><div><span>{version.sourceName||'-'}</span><div className="muted-id">{version.source||'-'}</div></div></Button>},
+    {title:'版本 ID',dataIndex:'version',width:180,render:value=><Text code copyable>{value}</Text>},
+    {title:'状态',width:110,render:(_,v)=><Tag color={{'校验中':'processing','校验失败':'error','已发布':'success'}[uploadStatus(v)]}>{uploadStatus(v)}</Tag>},
+    {title:'版本描述',dataIndex:'note',width:230},{title:'数据量',dataIndex:'samples',width:120,render:value=>numericSampleCount(value).toLocaleString()},
+    {title:'来源任务',width:230,render:(_,version)=><Button type="link" className="trace-link" onClick={()=>setSourceTaskDetail({id:version.source,name:version.sourceName,taskType:version.versionKind,updatedAt:version.updatedAt,inputVersionId:version.sourceVersionId,outputVersionId:version.version})}><div><span>{version.sourceName||'-'}</span><div className="muted-id">{version.source||'-'}</div></div></Button>},
     {title:'来源数据集版本',width:250,render:(_,version)=>version.sourceVersionId?<Button type="link" className="trace-link" onClick={()=>{const sourceDataset=datasets.find(item=>item.id===version.sourceDatasetId)||detail;const sourceVersion=sourceDataset?.versions.find(item=>item.version===version.sourceVersionId);if(sourceVersion)setVersionDetail({dataset:sourceDataset,version:sourceVersion});}}><div><span>{(datasets.find(item=>item.id===version.sourceDatasetId)||detail)?.name}</span><div className="muted-id">{version.sourceVersionId}</div></div></Button>:'-'},
     {title:'更新时间',dataIndex:'updatedAt',width:185,render:formatDateTime},
-    {title:'操作',fixed:'right',width:430,render:(_,version)=>{const canQuality=Boolean(version.templateId);const canEnhance=isFullQualityVersion(version);const canExpand=canEnhance;const hasCoverageGaps=Boolean(version.qualityReport?.coverageGaps?.length);return <Space size={0} className="dataset-version-actions"><Button type="link" size="small" onClick={()=>setVersionDetail({dataset:detail,version})}>详情</Button><Button type="link" size="small" href={downloadUrl(detail,version)} download={`${detail.name}-${version.version}.json`}>下载</Button><Button type="link" size="small" disabled={!canQuality} title={canQuality?'按绑定模板发起全量或部分质检':'该版本缺少模板血缘，请先绑定模板'} onClick={()=>startVersionTask(detail,version,'数据质检')}>质检</Button><Button type="link" size="small" disabled={!canEnhance} title={canEnhance?'基于正式全量质检结果发起增强':'部分抽检不能作为下游准入依据，请先完成正式全量质检'} onClick={()=>startVersionTask(detail,version,'数据增强')}>增强</Button><Button type="link" size="small" disabled={!canExpand} title={canExpand?(hasCoverageGaps?'基于覆盖缺口或自定义设置发起扩增':'当前无系统覆盖缺口，可使用自定义扩增设置'):'需先完成正式全量质检'} onClick={()=>startVersionTask(detail,version,'定向扩增')}>扩增</Button><Button type="link" size="small" danger onClick={()=>deleteVersion(detail,version)}>删除</Button></Space>;}},
+    {title:'操作',fixed:'right',width:240,render:(_,version)=>{
+      const state=uploadStatus(version),editable=version.sourceType==='用户上传'&&['草稿','校验失败','待处理'].includes(state);
+      const items=[
+        {key:'stop',label:'终止校验',disabled:state!=='校验中',onClick:()=>terminateUpload(version)},
+        {key:'download',label:'下载',disabled:!published(version)||downloading===version.version,onClick:()=>downloadVersionExample(detail,version)},
+        {key:'quality',label:'质检',disabled:!published(version)||!version.templateId,onClick:()=>startVersionTask(detail,version,'数据质检')},
+        {key:'enhance',label:'增强',disabled:!published(version)||!isQualityCheckedVersion(version),onClick:()=>startVersionTask(detail,version,'数据增强')},
+        {key:'expand',label:'定向扩增',disabled:!published(version)||!isQualityCheckedVersion(version),onClick:()=>startVersionTask(detail,version,'定向扩增')},
+        {type:'divider'},
+        {key:'delete',label:'删除',danger:true,disabled:state==='校验中',onClick:()=>deleteVersion(detail,version)}
+      ];
+      return <Space size={0} wrap={false}><Button type="link" size="small" onClick={()=>setVersionDetail({dataset:detail,version})}>详情</Button><Button type="link" size="small" disabled={!editable} onClick={()=>{setEditingUpload({dataset:detail,version});onUploadingChange(true);}}>编辑</Button><Button type="link" size="small" disabled={!editable} onClick={()=>publishUpload(version)}>{uploadStatus(version)==='待处理'?'处理':'发布'}</Button><Dropdown trigger={['click']} menu={{items}} placement="bottomRight"><Button type="link" size="small">更多 <DownOutlined/></Button></Dropdown></Space>;
+    }},
+
+
   ]:[];
   const downstreamColumns=versionDetail?[
     {title:'任务名称 / ID',width:280,render:(_,task)=><div><Text>{task.name}</Text><div className="muted-id">{task.id}</div></div>},{title:'任务类型',dataIndex:'taskType',width:110,render:value=><Tag color={taskTypeColor(value)}>{value}</Tag>},{title:'更新时间',dataIndex:'updatedAt',width:185,render:formatDateTime},{title:'操作',fixed:'right',width:90,render:(_,task)=><Button type="link" size="small" href={taskDetailUrl(versionDetail.dataset,versionDetail.version,task)} target="_blank" rel="noreferrer">详情</Button>},
   ]:[];
-  if(uploading)return <UploadDatasetPage onCancel={()=>onUploadingChange(false)} onSubmit={createUploadedDataset} datasets={datasets}/>;
+  if(uploading)return <UploadDatasetPage editing={editingUpload} onCancel={()=>{setEditingUpload(null);onUploadingChange(false);}} onSubmit={createUploadedDataset} datasets={datasets}/>;
   return <>
     <PageHeader title="数据中心" description="集中查看、预览和下载任务产生的数据集及不可变版本" actions={<Button type="primary" icon={<CloudUploadOutlined/>} onClick={()=>onUploadingChange(true)}>上传数据</Button>}/>
-    <Card className="main-card" styles={{body:{padding:0}}}><Flex justify="space-between" align="center" className="toolbar"><Space><Segmented value={modality} onChange={value=>{setModality(value);setBusinessTypeFilter('全部');}} options={[{label:'全部',value:'全部'},{label:'文档类图像',value:'文档图像'},{label:'对话',value:'对话文本'},{label:'时序',value:'时序数据'}]}/><Select value={sourceFilter} onChange={setSourceFilter} style={{width:140}} options={[{label:'全部来源',value:'全部'},{label:'任务生成',value:'任务生成'},{label:'用户上传',value:'用户上传'}]}/><Select value={businessTypeFilter} onChange={setBusinessTypeFilter} style={{width:170}} options={[{label:'全部业务类型',value:'全部'},...datasetBusinessTypeOptions.map(value=>({label:value,value}))]}/></Space><Input allowClear prefix={<SearchOutlined/>} placeholder="搜索名称、ID或业务类型" value={query} onChange={event=>setQuery(event.target.value)} style={{width:250}}/></Flex><Table rowKey="id" columns={datasetColumns} dataSource={list} scroll={{x:1180}} pagination={{pageSize:8,showTotal:total=>`共 ${total} 条`}}/></Card>
-    <Drawer title="数据集详情" size={1240} open={!!detail} onClose={()=>setDetail(null)}>{detail&&<><Title level={4}>{detail.name}</Title><Descriptions bordered size="small" column={2} className="dataset-kv-details" items={[
+    <Card className="main-card" styles={{body:{padding:0}}}><Flex justify="space-between" align="center" className="toolbar"><Space><Segmented value={modality} onChange={value=>{setModality(value);setBusinessTypeFilter('全部');}} options={[{label:'全部',value:'全部'},{label:'文档图像',value:'文档图像'},{label:'对话文本',value:'对话文本'},{label:'时序数据',value:'时序数据'}]}/><Select placeholder="请选择选项" value={sourceFilter} onChange={setSourceFilter} style={{width:140}} options={[{label:'全部来源',value:'全部'},{label:'任务生成',value:'任务生成'},{label:'用户上传',value:'用户上传'}]}/><Select placeholder="请选择选项" value={businessTypeFilter} onChange={setBusinessTypeFilter} style={{width:170}} options={[{label:'全部业务类型',value:'全部'},...datasetBusinessTypeOptions.map(value=>({label:value,value}))]}/></Space><Input allowClear prefix={<SearchOutlined/>} placeholder="搜索名称、ID或业务类型" value={query} onChange={event=>setQuery(event.target.value)} style={{width:250}}/></Flex><Table rowKey="id" columns={datasetColumns} dataSource={list} scroll={{x:1180}} pagination={{pageSize:8,showTotal:total=>`共 ${total} 条`}}/></Card>
+    <DetailPage title="数据集详情" size={1240} open={!!detail} onClose={()=>{setDetail(null);setUploadPanelVersion(null);}}>{detail&&<><Title level={4}>{detail.name}</Title><Descriptions bordered size="small" column={2} className="dataset-kv-details" items={[
       {key:'modality',label:'数据类型',children:detail.modality},{key:'business',label:'业务类型',children:detail.businessType},{key:'source',label:'来源',children:detail.sourceType||'任务生成'},{key:'samples',label:'总样本数',children:numericSampleCount(detail.totalSamples).toLocaleString()},{key:'updated',label:'更新时间',children:formatDateTime(detail.updatedAt||detail.versions?.[0]?.updatedAt)},{key:'description',label:'数据集描述',span:2,children:<Flex justify="space-between" align="center" gap={16}><Text>{detail.desc}</Text><Button type="link" size="small" onClick={()=>{setDescriptionDraft(detail.desc||'');setDescriptionEditing(true);}}>编辑</Button></Flex>},
-    ]}/><Title level={5} className="section-title">数据集版本</Title><Table rowKey="id" scroll={{x:1620}} dataSource={detail.versions} columns={versionColumns} pagination={{pageSize:5,showSizeChanger:false,hideOnSinglePage:true,showTotal:total=>`共 ${total} 个版本`}}/></>}</Drawer>
-    <Modal title="编辑数据集描述" open={descriptionEditing} onCancel={()=>setDescriptionEditing(false)} onOk={saveDescription} okText="保存" cancelText="取消"><Input.TextArea rows={5} value={descriptionDraft} maxLength={300} showCount onChange={event=>setDescriptionDraft(event.target.value)}/></Modal>
-    <Drawer title="数据集版本详情" size={900} open={!!versionDetail} onClose={()=>setVersionDetail(null)}>{versionDetail&&<><Title level={4}>{versionDetail.dataset.name} / {versionDetail.version.version}</Title><Tabs defaultActiveKey="base" items={[
+    ]}/><Title level={5} className="section-title">数据集版本</Title><Table rowKey="id" scroll={{x:1620}} dataSource={detail.versions} columns={versionColumns} pagination={{pageSize:5,showSizeChanger:false,hideOnSinglePage:true,showTotal:total=>`共 ${total} 个版本`}}/>{(displayedUploadVersion?[displayedUploadVersion]:[]).map(version=><UploadPublicationPanel key={version.version} version={version} versions={uploadPanelVersions} onVersionChange={setUploadPanelVersion} onChange={next=>updateDataset(detail.id,d=>replaceUploadVersion(d,next))} onEdit={next=>{setEditingUpload({dataset:detail,version:next});onUploadingChange(true);}} onDetail={()=>setSourceTaskDetail({id:version.source,name:version.sourceName})}/>)}</>}</DetailPage>
+    <Modal title="编辑数据集描述" open={descriptionEditing} onCancel={()=>setDescriptionEditing(false)} onOk={saveDescription} okText="保存" cancelText="取消"><Input.TextArea placeholder="请输入内容" rows={5} value={descriptionDraft} maxLength={300} showCount onChange={event=>setDescriptionDraft(event.target.value)}/></Modal>
+    <DetailPage title="数据集版本详情" size={900} open={!!versionDetail} onClose={()=>setVersionDetail(null)}>{versionDetail&&<><Title level={4}>{versionDetail.dataset.name} / {versionDetail.version.version}</Title><Tabs key={versionDetail.version.version} defaultActiveKey={versionDetail.activeTab||'base'} items={[
       {key:'base',label:'基础信息',children:<><Descriptions bordered column={2} className="detail-descriptions" items={[
-        {key:'description',label:'版本描述',children:versionDetail.version.note},{key:'count',label:'数据量',children:numericSampleCount(versionDetail.version.samples).toLocaleString()},{key:'kind',label:'版本类型',children:<Tag>{versionDetail.version.versionKind||'-'}</Tag>},{key:'updated',label:'更新时间',children:formatDateTime(versionDetail.version.updatedAt||versionDetail.version.created)},
+        {key:'publication',label:'状态',children:uploadStatus(versionDetail.version)},{key:'description',label:'版本描述',children:versionDetail.version.note},{key:'count',label:'数据量',children:numericSampleCount(versionDetail.version.samples).toLocaleString()},{key:'kind',label:'版本类型',children:<Tag>{versionDetail.version.versionKind||'-'}</Tag>},{key:'updated',label:'更新时间',children:formatDateTime(versionDetail.version.updatedAt||versionDetail.version.created)},
+      ]}/><Title level={5} style={{marginTop:24}}>数据来源</Title><Descriptions bordered column={2} className="detail-descriptions" items={[
         {key:'source',label:'来源任务',children:<Button type="link" className="trace-link" onClick={()=>setSourceTaskDetail({id:versionDetail.version.source,name:versionDetail.version.sourceName,taskType:versionDetail.version.versionKind,updatedAt:versionDetail.version.updatedAt,inputVersionId:versionDetail.version.sourceVersionId,outputVersionId:versionDetail.version.version})}><div><span>{versionDetail.version.sourceName||'-'}</span><div className="muted-id">{versionDetail.version.source||'-'}</div></div></Button>},
         {key:'source-version',label:'来源数据集版本',children:versionDetail.version.sourceVersionId?<Button type="link" className="trace-link" onClick={()=>{const sourceDataset=datasets.find(item=>item.id===versionDetail.version.sourceDatasetId)||versionDetail.dataset;const sourceVersion=sourceDataset?.versions.find(item=>item.version===versionDetail.version.sourceVersionId);if(sourceVersion)setVersionDetail({dataset:sourceDataset,version:sourceVersion});}}><div><span>{(datasets.find(item=>item.id===versionDetail.version.sourceDatasetId)||versionDetail.dataset)?.name}</span><div className="muted-id">{versionDetail.version.sourceVersionId}</div></div></Button>:'-'},
-        {key:'template',label:'模板血缘',span:2,children:<Text>{PUBLISHED_TEMPLATE_PROFILES.find(item=>item.id===versionDetail.version.templateId)?.name||versionDetail.version.templateId||'-'} / {versionDetail.version.templateVersion||'-'}</Text>},
-        {key:'relation',label:'版本生成关系',span:2,children:<Space wrap><Tag>{versionDetail.version.sourceVersionId||'无来源版本'}</Tag><Text>→</Text><Tag color="blue">{versionDetail.version.sourceName||versionDetail.version.source||'-'}</Tag><Text>→</Text><Tag color="green">{versionDetail.version.version}</Tag></Space>},
-      ]}/>{versionDetail.version.privacyCheck&&<><Title level={5}>上传隐私检查与脱敏结果</Title><Alert type="success" showIcon message={`隐私复检${versionDetail.version.privacyCheck.recheckStatus}，已脱敏 ${versionDetail.version.privacyCheck.desensitizedCount} 条数据`} description="这是上传入库安全门禁，不等同于模板正式质检；当前版本只包含脱敏后的数据，原始数据未被保留。"/><Descriptions bordered column={2} className="detail-descriptions" items={[
+        {key:'template',label:'关联模板',span:2,children:<Text>{PUBLISHED_TEMPLATE_PROFILES.find(item=>item.id===versionDetail.version.templateId)?.name||versionDetail.version.templateId||'-'}</Text>},
+      ]}/><VersionExecutionInfo version={versionDetail.version} onOpen={()=>setSourceTaskDetail({id:versionDetail.version.source,initialTab:'badcases'})}/>{versionDetail.version.privacyCheck&&<><Title level={5}>上传隐私检查与脱敏结果</Title><Alert type="success" showIcon message={`隐私复检${versionDetail.version.privacyCheck.recheckStatus}，已脱敏 ${versionDetail.version.privacyCheck.desensitizedCount} 条数据`} description="这是上传入库安全门禁，不等同于模板正式质检；当前版本只包含脱敏后的数据，原始数据未被保留。"/><Descriptions bordered column={2} className="detail-descriptions" items={[
         {key:'privacy-id',label:'上传隐私报告 ID',children:<Text copyable>{versionDetail.version.uploadPrivacyReportId||versionDetail.version.privacyCheck.reportId}</Text>},{key:'privacy-status',label:'检查结果',children:<Tag color="green">{versionDetail.version.privacyCheck.status}</Tag>},{key:'privacy-inspected',label:'检查数据数',children:versionDetail.version.privacyCheck.inspectedCount},{key:'privacy-sensitive',label:'发现敏感数据',children:versionDetail.version.privacyCheck.sensitiveCount},{key:'privacy-masked',label:'完成脱敏数据',children:versionDetail.version.privacyCheck.desensitizedCount},{key:'privacy-types',label:'敏感信息类型',children:versionDetail.version.privacyCheck.findings.join('、')},{key:'privacy-storage',label:'数据保存策略',children:versionDetail.version.privacyCheck.storagePolicy},
       ]}/></>}<Title level={5}>下游任务</Title><Table rowKey="id" size="small" scroll={{x:720}} dataSource={versionDetail.version.consumers||[]} columns={downstreamColumns} pagination={{pageSize:5,showSizeChanger:false}} locale={{emptyText:'暂无下游任务'}}/></>},
-      {key:'quality',label:'质检报告',children:<><VersionQualityReport dataset={versionDetail.dataset} version={versionDetail.version}/>{versionDetail.version.enhancementSettings&&<><Title level={5} className="section-title">本版本增强设置</Title><Descriptions bordered size="small" column={2} items={[{key:'selection',label:'选样方式',children:versionDetail.version.enhancementSettings.sampleSelection==='pass'?'全部 PASS 样本':`综合分不低于 ${versionDetail.version.enhancementSettings.selectionThreshold}`},{key:'methods',label:'增强方法',children:(versionDetail.version.enhancementSettings.methods||[]).join('、')||'-'},{key:'custom',label:'自定义方案',children:versionDetail.version.enhancementSettings.custom?.name||'-'},{key:'privacy',label:'隐私脱敏方式',children:versionDetail.version.enhancementSettings.privacyMethods?Object.entries(versionDetail.version.enhancementSettings.privacyMethods).map(([type,method])=>`${type}：${method}`).join('；'):'-'}]}/></>}{versionDetail.version.expansionSettings&&<><Title level={5} className="section-title">本版本定向扩增设置</Title><Descriptions bordered size="small" column={2} items={[{key:'gaps',label:'系统建议项',children:(versionDetail.version.expansionSettings.coverageGapKeys||[]).join('、')||'-'},{key:'custom',label:'自定义设置',children:(versionDetail.version.expansionSettings.customSettings||[]).map(item=>`${item.name}（${item.count}）`).join('；')||'-'}]}/></>}</>},
-    ]}/></>}</Drawer>
-    <Drawer title="来源任务详情" size={680} open={!!sourceTaskDetail} onClose={()=>setSourceTaskDetail(null)}>{sourceTaskDetail&&<Descriptions bordered column={1} items={[{key:'name',label:'任务名称',children:sourceTaskDetail.name||'-'},{key:'id',label:'任务 ID',children:<Text copyable>{sourceTaskDetail.id||'-'}</Text>},{key:'type',label:'任务类型',children:<Tag>{sourceTaskDetail.taskType||'-'}</Tag>},{key:'input',label:'输入版本 ID',children:sourceTaskDetail.inputVersionId||'-'},{key:'output',label:'输出版本 ID',children:sourceTaskDetail.outputVersionId||'-'},{key:'updated',label:'更新时间',children:formatDateTime(sourceTaskDetail.updatedAt)}]}/>}</Drawer>
+      {key:'preview',label:'数据预览',children:!published(versionDetail.version)?<Empty description="发布后可预览数据"/>:<DatasetPreview key={versionDetail.version.version} dataset={versionDetail.dataset} version={versionDetail.version}/>},
+      {key:'quality',label:'质检报告',children:<>{versionDetail.version.sourceType==='用户上传'&&<UploadTaskDetail version={versionDetail.version} onChange={next=>updateDataset(versionDetail.dataset.id,d=>replaceUploadVersion(d,next))}/>}<VersionQualityReport dataset={versionDetail.dataset} version={versionDetail.version}/>{versionDetail.version.enhancementSettings&&<><Title level={5} className="section-title">本版本增强设置</Title><Descriptions bordered size="small" column={2} items={[{key:'methods',label:'增强方法',children:(versionDetail.version.enhancementSettings.methods||[]).filter(method=>method!=='隐私增强').join('、')||'-'},{key:'custom',label:'自定义方案',children:versionDetail.version.enhancementSettings.custom?.name||'-'}]}/></>}{versionDetail.version.expansionSettings&&<><Title level={5} className="section-title">本版本定向扩增设置</Title><Descriptions bordered size="small" column={2} items={[{key:'gaps',label:'系统建议项',children:(versionDetail.version.expansionSettings.coverageGapKeys||[]).join('、')||'-'},{key:'custom',label:'自定义设置',children:(versionDetail.version.expansionSettings.customSettings||[]).map(item=>`${item.name}（${item.count}）`).join('；')||'-'}]}/></>}</>},
+    ]}/></>}</DetailPage>
+    <DetailPage title={<Space direction="vertical" size={2}><span>来源任务详情</span><Text strong>{sourceTaskDetail?(uploadTaskVersion?.sourceName||resolveTask(sourceTaskDetail)?.name||sourceTaskDetail.name||sourceTaskDetail.id):''}</Text></Space>} size={1100} open={!!sourceTaskDetail} onClose={()=>setSourceTaskDetail(null)}>{sourceTaskDetail&&(uploadTaskVersion?<UploadTaskDetail version={uploadTaskVersion} onChange={next=>{const owner=datasets.find(d=>d.versions.some(v=>v.version===next.version));if(owner)updateDataset(owner.id,d=>replaceUploadVersion(d,next));}}/>:resolveTask(sourceTaskDetail)?<ProductTaskDetail key={`${sourceTaskDetail.id}-${sourceTaskDetail.initialTab||'info'}`} task={resolveTask(sourceTaskDetail)} datasets={datasets} initialTab={sourceTaskDetail.initialTab||'info'}/>:<Descriptions bordered column={1} items={[{key:'name',label:'任务名称',children:sourceTaskDetail.name||'-'},{key:'id',label:'任务 ID',children:<Text copyable>{sourceTaskDetail.id||'-'}</Text>},{key:'type',label:'任务类型',children:<Tag>{sourceTaskDetail.taskType||'-'}</Tag>},{key:'input',label:'输入版本 ID',children:sourceTaskDetail.inputVersionId||'-'},{key:'output',label:'输出版本 ID',children:sourceTaskDetail.outputVersionId||'-'},{key:'updated',label:'更新时间',children:formatDateTime(sourceTaskDetail.updatedAt)}]}/>)}</DetailPage>
   </>;
 }
 
@@ -2141,9 +2250,165 @@ const DATASET_STORAGE_KEY='data-factory-datasets-v3';
 function loadDatasets(){try{const value=window.localStorage.getItem(DATASET_STORAGE_KEY);return normalizeDatasets(value?JSON.parse(value):initialDatasets);}catch{return normalizeDatasets(initialDatasets);}}
 
 function PrototypeApp(){
-  const [view,setView]=useState('home'); const [datasets,setDatasets]=useState(loadDatasets); const [quickCreate,setQuickCreate]=useState(null); const [datasetStoreReady,setDatasetStoreReady]=useState(false); const [templateCreating,setTemplateCreating]=useState(false); const [datasetUploading,setDatasetUploading]=useState(false); const [sidebarCollapsed,setSidebarCollapsed]=useState(false);
-  useEffect(()=>{let active=true;localStoreApi.getState().then(state=>{if(active&&state.exists&&Array.isArray(state.datasets))setDatasets(normalizeDatasets(state.datasets));}).catch(error=>console.warn('数据集状态恢复失败',error)).finally(()=>{if(active)setDatasetStoreReady(true);});return()=>{active=false;};},[]);
-  useEffect(()=>{if(!datasetStoreReady)return;window.localStorage.setItem(DATASET_STORAGE_KEY,JSON.stringify(datasets));localStoreApi.saveState({datasets}).catch(error=>console.warn('数据集状态保存失败',error));},[datasets,datasetStoreReady]);
+  const readOnlyTaskRoute=new URLSearchParams(window.location.search).has('taskResult')||new URLSearchParams(window.location.search).has('downstreamTask');
+  const [tasks,setTasks]=useState(()=>normalizeTaskTimes(readStore('application-state',{}).tasks||initialTasks));
+  useEffect(()=>{const query=new URLSearchParams(window.location.search);if(query.has('taskResult')||query.has('downstreamTask'))return;const timer=setInterval(()=>setDatasets(items=>{let changed=false;const next=items.map(d=>{if(!d.versions.some(v=>uploadStatus(v)==='校验中'))return d;changed=true;const versions=d.versions.map(tickUploadCheck),latest=versions.find(published);return {...d,versions,totalSamples:versions.filter(published).reduce((s,v)=>s+Number(v.samples||0),0),defaultVersion:latest?.version||d.defaultVersion};});return changed?next:items;}),700);return ()=>clearInterval(timer);},[]);
+  const [view,setView]=useState(()=>new URLSearchParams(window.location.search).has('datasetDetail')?'data':'home'); const [datasets,setDatasets]=useState(loadDatasets); const [quickCreate,setQuickCreate]=useState(null); const [datasetStoreReady,setDatasetStoreReady]=useState(false); const [templateCreating,setTemplateCreating]=useState(false); const [datasetUploading,setDatasetUploading]=useState(false); const [sidebarCollapsed,setSidebarCollapsed]=useState(false);
+  useEffect(()=>{let active=true;localStoreApi.getState().then(state=>{if(active&&state.exists){if(Array.isArray(state.datasets))setDatasets(normalizeDatasets(state.datasets));if(Array.isArray(state.tasks))setTasks(normalizeTaskTimes(state.tasks));}}).catch(error=>console.warn('数据集状态恢复失败',error)).finally(()=>{if(active)setDatasetStoreReady(true);});return()=>{active=false;};},[]);
+  useEffect(()=>{if(!datasetStoreReady||readOnlyTaskRoute)return;localStoreApi.saveState({datasets}).catch(error=>console.warn('数据集状态保存失败',error));},[datasets,datasetStoreReady]);
+  useEffect(()=>{if(!datasetStoreReady||readOnlyTaskRoute)return;localStoreApi.saveState({tasks}).catch(error=>message.error(`任务保存失败：${error.message}`));},[tasks,datasetStoreReady]);
+  useEffect(()=>{
+    if(!readOnlyTaskRoute)return;
+    const sync=()=>{localStoreApi.getState().then(saved=>{if(saved.tasks)setTasks(normalizeTaskTimes(saved.tasks));if(saved.datasets)setDatasets(normalizeDatasets(saved.datasets));});};
+    window.addEventListener('storage',sync);return()=>window.removeEventListener('storage',sync);
+  },[]);
+  useEffect(()=>{
+    if(!datasetStoreReady||readOnlyTaskRoute||readStore('application-state',{}).retryDemoSeeded)return;
+    localStoreApi.saveState({retryDemoSeeded:true});
+    const examples=[
+      ['文档图像','数据合成','运单图像合成·异常记录示例'],
+      ['对话文本','数据质检','客服对话抽检·异常记录示例'],
+      ['时序数据','数据增强','冷链事件增强·异常记录示例'],
+      ['文档图像','定向扩增','运单定向扩增·异常记录示例'],
+    ].map(([modality,taskType,name],index)=>{
+      const dataset=datasets.find(d=>d.modality===modality);
+      const sourceVersion=dataset?.versions[0];
+      const template=templateForDataset(dataset);
+      const id=`TASK-20260914-RETRY-${index+1}`;
+      const v={name,description:'',modality,taskType,businessType:template?.businessType||dataset?.businessType,templateProfile:template,templateId:template?.id,qualityRules:templateQualityRules(modality,template),generationModel:template?.defaultModel,qualityModel:'Qwen3-VL-8B-Instruct',enhancementModel:'Qwen3-14B',expansionModel:defaultExpansionModel(modality),sampleCount:360,effectiveTargetCount:360,selectableCount:360,qualityScope:'sample',qualityCheckedSampleCount:360,sourceVersion,inputDatasetId:dataset?.id,inputVersionId:sourceVersion?.version,outputMode:'newVersion',targetDataset:dataset?.name,versionNote:'任务执行结果',input:taskType==='数据合成'?template?.name:`${dataset?.name} / ${sourceVersion?.version}`,documentEnhancementTypes:['语义增强']};
+      let task=newExecutionTask(v,id,createVersionId(id));
+      for(let tick=0;tick<12;tick++)task=advanceExecution(task);
+      task={...task,datasetWritten:true,outputVersionId:task.plannedOutputVersionId,output:task.plannedOutputVersionId};
+      commitPrototypeTaskOutput(task.configSnapshot,task.id,task.outputVersionId,setDatasets,task);
+      return task;
+    });
+    setTasks(items=>[...examples,...items]);
+  },[datasetStoreReady]);
+  useEffect(()=>{
+    const id='TASK-20260915-DOC-ENHANCE-001';
+    if(!datasetStoreReady||readOnlyTaskRoute||readStore('application-state',{}).documentEnhancementDemoSeeded)return;
+    if(tasks.some(task=>task.id===id)){localStoreApi.saveState({documentEnhancementDemoSeeded:true});return;}
+    const dataset=datasets.find(item=>item.modality==='文档图像'&&item.versions.some(isFullQualityVersion));
+    if(!dataset)return;
+    const sourceVersion=dataset.versions.find(isFullQualityVersion);
+    const template=templateForDataset(dataset);
+    const count=Math.min(100,Number(sourceVersion.samples||0));
+    if(!count)return;
+    const values={
+      name:'文档图像语义与图像增强示例',description:'对已质检样本进行字段语义改写和图像增强，增强后自动复检。',
+      modality:'文档图像',taskType:'数据增强',businessType:template.businessType,
+      templateProfile:template,templateId:template.id,qualityRules:templateQualityRules('文档图像',template),
+      inputDatasetId:dataset.id,inputVersionId:sourceVersion.version,sourceVersion,
+      selectableCount:count,targetCount:count,effectiveTargetCount:count,sampleCount:count,
+      documentEnhancementTypes:['语义增强','图像增强'],documentSemanticRules:['SEM-LONG-TEXT'],
+      documentImageMethods:['旋转 / 透视 / 亮度变化'],
+      semanticEnhancementModel:'Qwen3-VL-8B-Instruct',semanticEnhancementParametersEnabled:false,
+      enhancementModel:'Qwen3-VL-8B-Instruct',qualityModel:'Qwen3-VL-8B-Instruct',
+      privacyMethods:{姓名:'虚构替换',手机号:'部分掩码',地址:'泛化'},
+      qualityScope:'full',outputMode:'newVersion',targetDataset:dataset.name,versionNote:'文档图像增强及复检结果',
+      input:`${dataset.name} / ${sourceVersion.version}`,
+    };
+    let task=newExecutionTask(values,id,createVersionId(id));
+    for(let tick=0;tick<12;tick++)task=advanceExecution(task);
+    task={...task,datasetWritten:true,outputVersionId:task.plannedOutputVersionId,output:`${dataset.name} / ${task.plannedOutputVersionId}`};
+    localStoreApi.saveState({documentEnhancementDemoSeeded:true});
+    commitPrototypeTaskOutput(values,id,task.outputVersionId,setDatasets,task);
+    setTasks(items=>items.some(item=>item.id===id)?items:[task,...items]);
+  },[datasetStoreReady,datasets,tasks]);
+  useEffect(()=>{
+    if(!datasetStoreReady||readOnlyTaskRoute)return;
+    const definitions=[
+      {id:'TASK-20260918-CONV-ENHANCE-001',flag:'conversationEnhancementDemoSeeded0918',modality:'对话文本',taskType:'数据增强',name:'物流客服对话语义增强示例'},
+      {id:'TASK-20260915-CONV-EXPAND-001',flag:'conversationExpansionDemoSeeded',modality:'对话文本',taskType:'定向扩增',name:'对话文本定向扩增示例'},
+      {id:'TASK-20260916-DOC-QUALITY-001',flag:'documentQualityReportDemoSeeded',modality:'文档图像',taskType:'数据质检',name:'文档图像完整质检报告示例'},
+      {id:'TASK-20260916-CONV-QUALITY-001',flag:'conversationQualityReportDemoSeeded',modality:'对话文本',taskType:'数据质检',name:'对话文本完整质检报告示例'},
+      {id:'TASK-20260916-TS-QUALITY-001',flag:'timeseriesQualityReportDemoSeeded',modality:'时序数据',taskType:'数据质检',name:'时序数据完整质检报告示例'},
+      {id:'TASK-20260915-TS-QUALITY-001',flag:'timeseriesQualityDemoSeeded',modality:'时序数据',taskType:'数据质检',name:'时序数据质检示例'},
+    ];
+    const state=readStore('application-state',{});
+    for(const definition of definitions){
+      if(state[definition.flag])continue;
+      if(tasks.some(task=>task.id===definition.id)){localStoreApi.saveState({[definition.flag]:true});continue;}
+      const expansion=definition.taskType==='定向扩增',enhancement=definition.taskType==='数据增强';
+      const eligible=expansion||enhancement?isFullQualityVersion:published;
+      const family=TASK_FAMILIES[definition.modality==='文档图像'?'waybill':definition.modality==='对话文本'?'conversation':'timeseries'];
+      const dataset=datasets.find(item=>item.name===family.datasetName&&item.versions.some(eligible));
+      if(!dataset)continue;
+      const sourceVersion=dataset.versions.find(eligible);
+      const template=templateForDataset(dataset);
+      if(!template)continue;
+      const values={
+        name:definition.name,description:enhancement?'基于物流智能客服对话模板生成100条语义增强样本，并执行自动复检。':expansion?'根据质检覆盖缺口定向扩增对话样本，并自动复检。':'对关联数据集版本执行模板的全部质检规则，形成逐规则报告。',
+        modality:definition.modality,taskType:definition.taskType,businessType:template.businessType,
+        templateProfile:template,templateId:template.id,qualityRules:templateQualityRules(definition.modality,template),
+        inputDatasetId:dataset.id,inputVersionId:sourceVersion.version,sourceVersion,
+        sampleCount:100,targetCount:100,effectiveTargetCount:100,selectableCount:100,
+        ...(!expansion&&!enhancement?{qualityCheckedSampleCount:numericSampleCount(sourceVersion.samples)}:{}),
+        qualityScope:'full',qualityModel:'Qwen3-14B',qualityParametersEnabled:false,
+        outputMode:'newVersion',targetDataset:dataset.name,
+        versionNote:enhancement?'对话语义增强及复检结果':expansion?'对话定向扩增及复检结果':'全量质检报告',
+        ...(enhancement?{autoQualityEnabled:true,enhancementModel:'Qwen3-14B',conversationSemanticMethods:['表达同义改写'],conversationSemanticCustomRules:[{name:'物流咨询表达改写',prompt:'保留事件计划、工具返回和业务事实，改写用户问法与客服表达，不增加未经证实的承诺。'}]}:{}),
+        input:`${dataset.name} / ${sourceVersion.version}`,
+        ...(expansion?{
+          expansionModel:defaultExpansionModel(definition.modality),expansionParametersEnabled:false,
+          coverageGapKeys:[],customExpansionEnabled:true,
+          customExpansionSettings:[{name:'异常反馈对话补充',labels:[],count:100,prompt:'遵循关联模板的业务场景、角色和质检规则，补充异常反馈场景的对话样本。',model:'Qwen3-14B',parametersEnabled:false}],
+        }:{}),
+      };
+      let task=newExecutionTask(values,definition.id,createVersionId(definition.id),enhancement?'success':'mixed');
+      for(let tick=0;tick<12;tick++)task=advanceExecution(task);
+      const hasOutput=task.executionSummary.outputSampleCount>0&&(task.taskType!=='数据质检'||!['异常','失败','已终止'].includes(task.status));
+      task={...task,datasetWritten:true,outputVersionId:hasOutput?task.plannedOutputVersionId:null,output:hasOutput?`${dataset.name} / ${task.plannedOutputVersionId}`:'未生成数据集版本'};
+      localStoreApi.saveState({[definition.flag]:true});
+      if(hasOutput)commitPrototypeTaskOutput(values,task.id,task.outputVersionId,setDatasets,task);
+      setTasks(items=>items.some(item=>item.id===task.id)?items:[task,...items]);
+    }
+  },[datasetStoreReady,datasets,tasks]);
+  useEffect(()=>{
+    if(!datasetStoreReady||readOnlyTaskRoute)return;
+    setTasks(items=>{let changed=false;const aligned=items.map(task=>{
+      if(!BUILTIN_TASK_FAMILIES[task.id]||task.builtinFamilyAligned0918)return task;
+      const family=TASK_FAMILIES[BUILTIN_TASK_FAMILIES[task.id]],dataset=datasets.find(d=>d.name===family.datasetName),template=PUBLISHED_TEMPLATE_PROFILES.find(t=>t.id===family.templateId);
+      if(!dataset||!template)return task;
+      const synthesis=task.taskType==='数据合成',produced=dataset.versions.find(v=>v.source===task.id),version=dataset.versions.find(v=>v.version===(task.sourceVersionId||task.configSnapshot?.inputVersionId))||dataset.versions.find(v=>v.version===produced?.sourceVersionId)||dataset.versions.find(published);
+      if(!synthesis&&!version)return task;
+      changed=true;
+      const previous=task.configSnapshot||task.historicalConfigSnapshot||{};
+      const snapshot={...previous,templateId:template.id,templateProfile:{...previous.templateProfile,...template},businessType:template.businessType,...(!synthesis?{inputDatasetId:dataset.id,inputVersionId:version.version,sourceVersion:{version:version.version,samples:version.samples,templateId:template.id}}:{})};
+      return {...alignBuiltinTask(task),builtinFamilyAligned0918:true,...(!synthesis?{sourceDatasetId:dataset.id,sourceVersionId:version.version,input:dataset.name+' / '+version.version}:{}),...(task.configSnapshot?{configSnapshot:snapshot}:{historicalConfigSnapshot:snapshot})};
+    });return changed?aligned:items;});
+  },[datasetStoreReady,readOnlyTaskRoute,datasets]);
+  useEffect(()=>{
+    if(!datasetStoreReady||readOnlyTaskRoute)return;
+    setTasks(items=>reconcileDemoTaskLinks(items,datasets,PUBLISHED_TEMPLATE_PROFILES));
+  },[datasetStoreReady,readOnlyTaskRoute,datasets]);
+  useEffect(()=>{
+    if(!datasetStoreReady||readOnlyTaskRoute)return;
+    setDatasets(items=>reconcileDemoDatasetLinks(items,tasks));
+  },[datasetStoreReady,readOnlyTaskRoute,tasks]);
+  useEffect(()=>{
+    if(!datasetStoreReady||readOnlyTaskRoute)return;
+    const refreshed=refreshBuiltinQuality(tasks,datasets);
+    if(refreshed.changed){setTasks(refreshed.tasks);setDatasets(refreshed.datasets);}
+  },[datasetStoreReady,tasks,datasets]);
+  useEffect(()=>{
+    if(!datasetStoreReady||readOnlyTaskRoute||!tasks.some(task=>task.execution&&task.status==='运行中'))return;
+    const timer=window.setTimeout(()=>{
+      const next=tasks.map(task=>{
+        let updated=advanceExecution(task);
+        if(updated!==task&&updated.status!=='运行中'){
+          const canWrite=updated.taskType==='数据质检'||updated.executionSummary.outputSampleCount>0;
+          const config=updated.configSnapshot;
+          const outputName=config.taskType==='数据合成'?(config.outputMode==='newVersion'?config.targetDataset:config.outputDatasetName):datasets.find(d=>d.id===config.inputDatasetId)?.name;
+          updated={...updated,datasetWritten:true,outputVersionId:canWrite?updated.plannedOutputVersionId:null,output:canWrite?`${outputName||'数据集'} / ${updated.plannedOutputVersionId}`:'无正式输出'};
+          if(canWrite)commitPrototypeTaskOutput(updated.configSnapshot,updated.id,updated.outputVersionId,setDatasets,updated);
+        }
+        return updated;
+      });
+      setTasks(next);
+    },700);
+    return()=>window.clearTimeout(timer);
+  },[tasks,datasetStoreReady]);
   useEffect(()=>{if(view!=='data')setDatasetUploading(false);},[view]);
   const menuItems=[{key:'home',icon:<HomeOutlined/>,label:'首页'},{key:'data',icon:<DatabaseOutlined/>,label:'数据中心'},{key:'tasks',icon:<AppstoreOutlined/>,label:'任务中心',children:Object.entries(taskPageConfig).map(([key,item])=>({key,icon:item.icon,label:item.label}))},{key:'templates',icon:<ApartmentOutlined/>,label:'模板中心'}];
   const bottomMenuItems=[{key:'apiKeys',icon:<KeyOutlined/>,label:'API Keys'}];
@@ -2161,25 +2426,40 @@ function PrototypeApp(){
     });
   };
   const routeParams=new URLSearchParams(window.location.search);
+  const templateReference=routeParams.get('templateReference');
+  if(templateReference){
+    const task=tasks.find(item=>item.id===routeParams.get('referenceTask'));
+    const snapshot=task?resolveTaskConfiguration(task,datasets).templateProfile:null;
+    const template=snapshot?.id===templateReference?snapshot:PUBLISHED_TEMPLATE_PROFILES.find(item=>item.id===templateReference);
+    return <ConfigProvider locale={zhCN} theme={uedTheme}><AntApp><main className="standalone-task-detail"><Flex justify="space-between" align="center"><Title level={3}>关联模板详情</Title><Button onClick={()=>window.close()}>关闭页面</Button></Flex>{template?<TemplateEvidence template={template} modality={template.modality||task?.modality}/>:<Empty description="未找到关联模板"/>}</main></AntApp></ConfigProvider>;
+  }
+  const resultTaskId=routeParams.get('taskResult');
+  if(resultTaskId){
+    const resultDataset=datasets.find(d=>d.versions.some(v=>v.source===resultTaskId||qualityReports(v).some(r=>r.taskId===resultTaskId)));
+    const resultVersion=resultDataset?.versions.find(v=>v.source===resultTaskId||qualityReports(v).some(r=>r.taskId===resultTaskId));
+    return <ConfigProvider locale={zhCN} theme={uedTheme}><AntApp><main className="standalone-task-detail"><Title level={3}>{resultDataset?.name||'运行结果'}</Title>{resultVersion?<Card><Descriptions bordered items={[{key:'id',label:'版本 ID',children:resultVersion.version},{key:'n',label:'样本数',children:resultVersion.samples},{key:'task',label:'来源任务',children:resultTaskId}]}/><Divider/><Tabs items={[{key:'quality',label:'质检报告',children:<VersionQualityReport dataset={resultDataset} version={versionWithReport(resultVersion,qualityReports(resultVersion).find(r=>r.taskId===resultTaskId))} fixedReport/>},{key:'badcases',label:'Badcase',children:<BadcasePanel task={tasks.find(t=>t.id===resultTaskId)||resultVersion.sampleExecution}/>}]} /></Card>:<Empty description="未找到输出版本"/>}</main></AntApp></ConfigProvider>;
+  }
   const downstreamTaskId=routeParams.get('downstreamTask');
   if(downstreamTaskId){
     const dataset=datasets.find(item=>String(item.id)===routeParams.get('datasetId'))||datasets.find(item=>item.versions.some(version=>version.consumers?.some(task=>task.id===downstreamTaskId)));
     const version=dataset?.versions.find(item=>item.version===routeParams.get('versionId'))||dataset?.versions.find(item=>item.consumers?.some(task=>task.id===downstreamTaskId));
-    const task=version?.consumers?.find(item=>item.id===downstreamTaskId);
-    return <ConfigProvider locale={zhCN}><AntApp><DownstreamTaskDetailPage task={task} dataset={dataset} version={version}/></AntApp></ConfigProvider>;
+    const task=tasks.find(item=>item.id===downstreamTaskId)||version?.consumers?.find(item=>item.id===downstreamTaskId);
+    return <ConfigProvider locale={zhCN} theme={uedTheme}><AntApp><DownstreamTaskDetailPage task={task} dataset={dataset} version={version}/></AntApp></ConfigProvider>;
   }
-  return <ConfigProvider locale={zhCN} theme={{token:{colorPrimary:'#1677ff',borderRadius:6,colorBgLayout:'#f5f5f5',fontFamily:'-apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Microsoft YaHei",sans-serif'},components:{Layout:{siderBg:'#001529',headerBg:'#fff'},Menu:{darkItemBg:'#001529',darkItemSelectedBg:'#1677ff'}}}}><AntApp><Layout className={`app-layout${sidebarCollapsed?' app-layout-collapsed':''}`}><Sider width={224} collapsedWidth={72} collapsed={sidebarCollapsed} trigger={null} theme="dark" className="app-sider"><div className="brand"><Avatar shape="square" size={36} className="brand-logo">数</Avatar>{!sidebarCollapsed&&<div className="brand-name">数据生成工具</div>}<Button type="text" className="brand-collapse-button" icon={sidebarCollapsed?<MenuUnfoldOutlined/>:<MenuFoldOutlined/>} aria-label={sidebarCollapsed?'展开左侧菜单':'收起左侧菜单'} onClick={()=>setSidebarCollapsed(value=>!value)}/></div><Menu className="app-main-menu" theme="dark" mode="inline" defaultOpenKeys={['tasks']} selectedKeys={[view]} items={menuItems} onClick={({key})=>{setQuickCreate(null);setView(key);}}/><Menu className="app-bottom-menu" theme="dark" mode="inline" selectedKeys={[view]} items={bottomMenuItems} onClick={({key})=>{setQuickCreate(null);setView(key);}}/><Dropdown trigger={['click']} placement={sidebarCollapsed?'topRight':'topLeft'} menu={{items:[{key:'profile',label:'个人信息'},{key:'logout',label:'退出登录'}],onClick:handleUserMenuClick}}><div className={`sidebar-user${sidebarCollapsed?' collapsed':''}`}><Avatar size={32}>FD</Avatar>{!sidebarCollapsed&&<><div className="sidebar-user-text"><Text>{CURRENT_USER}</Text><span>当前用户</span></div><DownOutlined/></>}</div></Dropdown></Sider><Layout><Header className="app-header"><Flex align="center"><Breadcrumb items={breadcrumbItems}/></Flex></Header><Content className="app-content">{view==='home'?<HomePage onNavigate={setView} onCreate={createTask}/>:activeTaskPage?<TaskCenter datasets={datasets} setDatasets={setDatasets} modality={activeTaskPage.modality} pageTitle={activeTaskPage.label} startCreate={quickCreate} onStartConsumed={()=>setQuickCreate(null)} onNavigate={setView}/>:view==='templates'?<TemplateCenter creating={templateCreating} onCreatingChange={setTemplateCreating}/>:view==='apiKeys'?<ApiKeysManager/>:<DataCenter datasets={datasets} setDatasets={setDatasets} uploading={datasetUploading} onUploadingChange={setDatasetUploading} onStartTask={(dataset,version,taskType)=>{const target=Object.entries(taskPageConfig).find(([,item])=>item.modality===dataset.modality)?.[0]||'tasks-document';setQuickCreate({taskType,inputDatasetId:dataset.id,inputVersionId:version.version});setView(target);}}/>}</Content></Layout></Layout></AntApp></ConfigProvider>;
+  return <ConfigProvider locale={zhCN} theme={uedTheme}><AntApp><Layout className={`app-layout${sidebarCollapsed?' app-layout-collapsed':''}`}><Sider width={216} collapsedWidth={64} collapsed={sidebarCollapsed} trigger={null} theme="light" className="app-sider"><div className="brand"><Avatar shape="square" size={36} className="brand-logo">数</Avatar>{!sidebarCollapsed&&<div className="brand-name">数据生成工具</div>}<Button type="text" className="brand-collapse-button" icon={sidebarCollapsed?<MenuUnfoldOutlined/>:<MenuFoldOutlined/>} aria-label={sidebarCollapsed?'展开左侧菜单':'收起左侧菜单'} onClick={()=>setSidebarCollapsed(value=>!value)}/></div><Menu className="app-main-menu" theme="light" mode="inline" defaultOpenKeys={['tasks']} selectedKeys={[view]} items={menuItems} onClick={({key})=>{setQuickCreate(null);setView(key);}}/><Menu className="app-bottom-menu" theme="light" mode="inline" selectedKeys={[view]} items={bottomMenuItems} onClick={({key})=>{setQuickCreate(null);setView(key);}}/><Dropdown trigger={['click']} placement={sidebarCollapsed?'topRight':'topLeft'} menu={{items:[{key:'profile',label:'个人信息'},{key:'logout',label:'退出登录'}],onClick:handleUserMenuClick}}><div className={`sidebar-user${sidebarCollapsed?' collapsed':''}`}><Avatar size={32}>FD</Avatar>{!sidebarCollapsed&&<><div className="sidebar-user-text"><Text>{CURRENT_USER}</Text><span>当前用户</span></div><DownOutlined/></>}</div></Dropdown></Sider><Layout><Header className="app-header"><Flex align="center"><Breadcrumb items={breadcrumbItems}/></Flex></Header><Content className="app-content">{view==='home'?<HomePage onNavigate={setView} onCreate={createTask}/>:activeTaskPage?<TaskCenter tasks={tasks} setTasks={setTasks} storeReady={datasetStoreReady} datasets={datasets} setDatasets={setDatasets} modality={activeTaskPage.modality} pageTitle={activeTaskPage.label} startCreate={quickCreate} onStartConsumed={()=>setQuickCreate(null)} onNavigate={setView}/>:view==='templates'?<TemplateCenter creating={templateCreating} onCreatingChange={setTemplateCreating}/>:view==='apiKeys'?<ApiKeysManager/>:<DataCenter tasks={tasks} datasets={datasets} setDatasets={setDatasets} uploading={datasetUploading} onUploadingChange={setDatasetUploading} onStartTask={(dataset,version,taskType)=>{const target=Object.entries(taskPageConfig).find(([,item])=>item.modality===dataset.modality)?.[0]||'tasks-document';setQuickCreate({taskType,inputDatasetId:dataset.id,inputVersionId:version.version});setView(target);}}/>}</Content></Layout></Layout></AntApp></ConfigProvider>;
 }
 
 const qualityReportMatch = window.location.pathname.match(/^\/reports\/customs\/([^/]+)\/quality\/?$/);
 const coldChainQualityReportMatch = window.location.pathname.match(/^\/reports\/cold-chain\/([^/]+)\/quality\/?$/);
 const conversationQualityReportMatch = window.location.pathname.match(/^\/reports\/conversations\/([^/]+)\/quality\/?$/);
-createRoot(document.getElementById('root')).render(
+const appRoot=import.meta.hot?.data.root||createRoot(document.getElementById('root'));
+if(import.meta.hot)import.meta.hot.data.root=appRoot;
+appRoot.render(
   qualityReportMatch
-    ? <ConfigProvider locale={zhCN}><AntApp><CustomsQualityReportPage jobId={decodeURIComponent(qualityReportMatch[1])}/></AntApp></ConfigProvider>
+    ? <ConfigProvider locale={zhCN} theme={uedTheme}><AntApp><LegacyQualityReportPage modality="文档图像" jobId={decodeURIComponent(qualityReportMatch[1])}/></AntApp></ConfigProvider>
     : coldChainQualityReportMatch
-      ? <ConfigProvider locale={zhCN}><AntApp><ColdChainQualityReportPage jobId={decodeURIComponent(coldChainQualityReportMatch[1])}/></AntApp></ConfigProvider>
+      ? <ConfigProvider locale={zhCN} theme={uedTheme}><AntApp><LegacyQualityReportPage modality="时序数据" jobId={decodeURIComponent(coldChainQualityReportMatch[1])}/></AntApp></ConfigProvider>
       : conversationQualityReportMatch
-        ? <ConfigProvider locale={zhCN}><AntApp><ConversationQualityReportPage jobId={decodeURIComponent(conversationQualityReportMatch[1])}/></AntApp></ConfigProvider>
-        : <PrototypeApp/>
+        ? <ConfigProvider locale={zhCN} theme={uedTheme}><AntApp><LegacyQualityReportPage modality="对话文本" jobId={decodeURIComponent(conversationQualityReportMatch[1])}/></AntApp></ConfigProvider>
+        : <DetailWorkspace><PrototypeApp/></DetailWorkspace>
 );

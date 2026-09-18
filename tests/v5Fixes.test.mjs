@@ -1,0 +1,12 @@
+import assert from 'node:assert/strict';
+import {expansionModels,defaultExpansionModel,normalizeAugmentationCount as clamp} from '../src/taskFormConstraints.js';
+assert.deepEqual(expansionModels('文档图像'),['Doubao-Seedream-4.0']);
+assert.equal(defaultExpansionModel('文档图像'),'Doubao-Seedream-4.0');
+assert.equal(defaultExpansionModel('对话文本'),'Qwen3-14B');
+assert.equal(clamp(100,98),98);
+assert.equal(clamp(20,98),20);
+assert.equal(clamp(100,1),1);
+assert.equal(clamp(100,0),0);
+assert.equal(clamp(-1,98),1);
+assert.equal(clamp(1.5,98),1);
+console.log('PASS V5 model capability and augmentation source boundaries');

@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { COLDCHAIN_MODEL_CONFIGURATION } from '../src/timeSeriesModelSeed.js';
-import { compileStage1, compileStage2, DEMO_FROZEN_EVENT, PREVIEW_RUNTIME, validateEventResult, validateRuntime, validateSeriesResult } from '../src/timeSeriesPromptCompiler.js';
+import { samplePreviewAssignment, compileStage1, compileStage2, DEMO_FROZEN_EVENT, PREVIEW_RUNTIME, validateEventResult, validateRuntime, validateSeriesResult } from '../src/timeSeriesPromptCompiler.js';
 
 const template=structuredClone(COLDCHAIN_MODEL_CONFIGURATION);
 const door={selected_values:[{dimension_id:'event_type',dimension_name:'事件类型',option_id:'door_open',option_name:'开门'},{dimension_id:'primary_event_stage',dimension_name:'主要事件发生阶段',option_id:'port',option_name:'港口等待'},{dimension_id:'cargo_type',dimension_name:'货物类型',option_id:'chilled_goods',option_name:'冷藏货物'},{dimension_id:'environment',dimension_name:'环境条件',option_id:'mild_warm',option_name:'常规温暖环境'}],not_applicable_dimensions:[]};
@@ -59,3 +59,12 @@ assert.equal(/冷链|港口|箱温/.test(waterCompiled.userText),false,'通用�
 assert.equal(waterCompiled.userInput.output_schema.oneOf[0].properties.event.required.includes('route_plan'),false,'非定位模板不得要求route_plan');
 
 console.log('timeSeriesPromptCompiler: all tests passed');
+
+// Preview must sample the current options, including custom non-demo dimensions.
+const custom=structuredClone(template);
+custom.event_generation.sampling_dimensions=custom.event_generation.sampling_dimensions.map(d=>d.dimension_id==='cargo_type'?{...d,option_ids:{'自定义货物':'custom_cargo'},values:['自定义货物']}:d);
+for(const seed of [1,2,3,10,20260905]){
+  const assignment=samplePreviewAssignment(custom,seed);
+  assert.equal(assignment.selected_values.find(x=>x.dimension_id==='cargo_type').option_id,'custom_cargo');
+  assert.doesNotThrow(()=>compileStage1(custom,assignment,PREVIEW_RUNTIME));
+}

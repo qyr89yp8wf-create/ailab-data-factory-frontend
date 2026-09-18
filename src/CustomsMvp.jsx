@@ -179,7 +179,7 @@ function PrivacyFields({ form }) {
         const checked = selected.includes(field);
         return <div className="customs-privacy-row" key={field}>
           <Checkbox disabled={!enabled} checked={checked} onChange={event => toggle(field, event.target.checked)}>{label}</Checkbox>
-          <Select
+          <Select placeholder="请选择选项"
             disabled={!enabled || !checked}
             value={strategies[field] || 'random_replace'}
             options={PRIVACY_STRATEGIES}
@@ -198,10 +198,10 @@ export function CustomsTemplateFields() {
       type="info"
       showIcon
       message="选择本次合成使用的报关单模板"
-      description="模板决定版式、字段位置和 Ground Truth 坐标；提交任务后会把模板版本写入参数快照。"
+      description="模板决定版式、字段位置和 Ground Truth 坐标；提交任务后会把模板写入参数快照。"
     />
     <Form.Item name="customsTemplateId" label="报关单模板" rules={[{ required: true, message: '请选择报关单模板' }]} className="section-title">
-      <Select
+      <Select placeholder="请选择报关单模板"
         size="large"
         options={CUSTOMS_TEMPLATE_OPTIONS.map(item => ({ label: item.label, value: item.value }))}
       />
@@ -232,12 +232,12 @@ export function CustomsGenerationFields({ form }) {
     <Row gutter={16} className="section-title">
       <Col span={12}>
         <Form.Item name="count" label="生成图片数" rules={[{ required: true, message: '请输入生成图片数' }]}>
-          <InputNumber min={1} max={10} precision={0} style={{ width: '100%' }}/>
+          <InputNumber placeholder="请输入生成图片数（1～10）" min={1} max={10} precision={0} style={{ width: '100%' }}/>
         </Form.Item>
       </Col>
       <Col span={12}>
         <Form.Item name="seed" label="随机种子" extra="同一配置使用同一种子可复现相同结果；更换种子会生成新的内容、退化和印章选择。随机种子不会显示在图片中。" rules={[{ required: true, message: '请输入随机种子' }]}>
-          <InputNumber min={1} max={2147483647} precision={0} style={{ width: '100%' }}/>
+          <InputNumber placeholder="请输入随机种子（1～2147483647）" min={1} max={2147483647} precision={0} style={{ width: '100%' }}/>
         </Form.Item>
       </Col>
     </Row>
@@ -307,12 +307,12 @@ export function CustomsAugmentationFields({ form }) {
       <Row gutter={16}>
         <Col span={8}>
           <Form.Item name="outputResolutionMode" label="输出精度">
-            <Select disabled={!backgroundEnabled} options={OUTPUT_RESOLUTION_OPTIONS} onChange={applyResolutionMode}/>
+            <Select placeholder="请选择输出精度" disabled={!backgroundEnabled} options={OUTPUT_RESOLUTION_OPTIONS} onChange={applyResolutionMode}/>
           </Form.Item>
         </Col>
         <Col span={8}>
           <Form.Item name="documentScaleMode" label="原始内容占比">
-            <Select disabled={!backgroundEnabled} options={DOCUMENT_SCALE_OPTIONS} onChange={applyScaleMode}/>
+            <Select placeholder="请选择原始内容占比" disabled={!backgroundEnabled} options={DOCUMENT_SCALE_OPTIONS} onChange={applyScaleMode}/>
           </Form.Item>
         </Col>
         <Col span={8}>
@@ -324,10 +324,10 @@ export function CustomsAugmentationFields({ form }) {
         </Col>
       </Row>
       {resolutionMode === 'custom' && <Row gutter={16}>
-        <Col span={12}><Form.Item name="outputWidth" label="自定义宽度" rules={[{ type: 'number', min: 1600, max: 4096, message: '宽度必须在1600～4096px之间' }]}><InputNumber disabled={!backgroundEnabled} min={1600} max={4096} precision={0} addonAfter="px" style={{ width: '100%' }} onChange={changeCustomWidth}/></Form.Item></Col>
-        <Col span={12}><Form.Item name="outputHeight" label="自定义高度" rules={[{ type: 'number', min: 1000, max: 4096, message: '高度必须在1000～4096px之间' }]}><InputNumber disabled={!backgroundEnabled || lockAspectRatio} min={1000} max={4096} precision={0} addonAfter="px" style={{ width: '100%' }}/></Form.Item></Col>
+        <Col span={12}><Form.Item name="outputWidth" label="自定义宽度" rules={[{ type: 'number', min: 1600, max: 4096, message: '宽度必须在1600～4096px之间' }]}><InputNumber placeholder="请输入自定义宽度（1600～4096）" disabled={!backgroundEnabled} min={1600} max={4096} precision={0} addonAfter="px" style={{ width: '100%' }} onChange={changeCustomWidth}/></Form.Item></Col>
+        <Col span={12}><Form.Item name="outputHeight" label="自定义高度" rules={[{ type: 'number', min: 1000, max: 4096, message: '高度必须在1000～4096px之间' }]}><InputNumber placeholder="请输入自定义高度（1000～4096）" disabled={!backgroundEnabled || lockAspectRatio} min={1000} max={4096} precision={0} addonAfter="px" style={{ width: '100%' }}/></Form.Item></Col>
       </Row>}
-      {documentScaleMode === 'custom' && <Form.Item name="documentContentPercent" label="自定义原始内容线性占比" rules={[{ type: 'number', min: 70, max: 96, message: '占比必须在70%～96%之间' }]}><InputNumber disabled={!backgroundEnabled} min={70} max={96} precision={0} addonAfter="%"/></Form.Item>}
+      {documentScaleMode === 'custom' && <Form.Item name="documentContentPercent" label="自定义原始内容线性占比" rules={[{ type: 'number', min: 70, max: 96, message: '占比必须在70%～96%之间' }]}><InputNumber placeholder="请输入自定义原始内容线性占比（70～96）" disabled={!backgroundEnabled} min={70} max={96} precision={0} addonAfter="%"/></Form.Item>}
       {backgroundEnabled && Number(outputWidth) < 2480 && <Alert type="warning" showIcon message="小字段识别精度可能下降" description="当前输出宽度低于2480px，建议使用标准精度或提高原始内容占比。"/>}
       <Alert type="info" showIcon message="正式成品与预览分离" description="1216×864 等模型返回尺寸仅作为背景审计或页面预览参考；训练图片以这里选择的最终尺寸为准。"/>
     </Card>
@@ -388,7 +388,7 @@ export function CustomsQualityFields({ form }) {
                 : Promise.reject(new Error('原始图片与新增图片合计不得超过20张')),
             }]}
           >
-            <InputNumber min={0} max={10} disabled={!runQc || !enableExpansion}/>
+            <InputNumber placeholder="请输入最大新增图片数（0～10）" min={0} max={10} disabled={!runQc || !enableExpansion}/>
           </Form.Item>
         </Card>
       </Col>

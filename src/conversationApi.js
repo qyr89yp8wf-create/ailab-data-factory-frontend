@@ -3,6 +3,8 @@ import { defaultConversationSampler, sampleAssignments } from './conversationSam
 import { compileConversationPromptsFromConfiguration } from './conversationPromptCompiler';
 import { CONVERSATION_DEMO_TEMPLATE } from './conversationDemoTemplate';
 
+import {templateRulesSnapshot} from './templateQualitySnapshot.js';
+import {trialQualityReport,templateLabelSnapshot} from './qualityResults.js';
 const TEMPLATE_STORE = 'conversation-templates';
 const DRAFT_STORE = 'conversation-drafts';
 const JOB_STORE = 'conversation-jobs';
@@ -250,7 +252,9 @@ export const conversationApi = {
   getTemplateDraft: draftId => mockResult(readStore(DRAFT_STORE, []).find(item => item.draft_id === draftId)),
   saveTemplateDraft: (draftId, payload) => {
     let saved;
-    updateStore(DRAFT_STORE, [], values => values.map(item => {
+    updateStore(DRAFT_STORE, [], values => {
+      const base=values.some(item=>item.draft_id===draftId)?values:[...values,{draft_id:draftId,status:'draft',revision:0,created_at:now()}];
+      return base.map(item => {
       if (item.draft_id !== draftId) return item;
       const configuration = payload.configuration || payload;
       const identity = configuration.identity || {};
@@ -263,10 +267,10 @@ export const conversationApi = {
         updated_at: now(),
         compiled_prompt: null,
         validation: null,
-        trial_run: null,
+        trial_run: item.trial_run || null,
       };
       return saved;
-    }));
+    });});
     return mockResult(saved);
   },
   compileTemplateDraft: draftId => mockResult({ draft_id: draftId, valid: true, compiled_at: now(), placeholder_count: 7, warnings: [], errors: [], prompt_preview: 'Mock 已编译的单条事实与状态机生成指令。' }),
@@ -274,11 +278,13 @@ export const conversationApi = {
   trialTemplateDraft: (draftId, payload) => {
     const draft = readStore(DRAFT_STORE, []).find(item => item.draft_id === draftId);
     const trial = makeTrial(draft, payload);
+    trial.rule_report=trialQualityReport(templateRulesSnapshot('对话文本',draft?.configuration||{}),{sampleCount:payload.sample_count,labels:templateLabelSnapshot(draft?.configuration),templateId:draftId,templateVersion:String(draft?.revision||1)});
     updateStore(DRAFT_STORE, [], values => values.map(item => item.draft_id === draftId ? { ...item, trial_run: trial, validation: { valid: true }, updated_at: now() } : item));
     return mockResult(trial, 500);
   },
   publishTemplateDraft: draftId => {
     const draft = readStore(DRAFT_STORE, []).find(item => item.draft_id === draftId);
+    if(!draft)throw new Error('该对话模板草稿不存在或已经发布，请刷新模板中心');
     const identity = draft?.configuration?.identity || {};
     const item = { template_id: id('CONVTPL'), name: identity.name || '新建对话模板', description: identity.description || '', business_type: identity.business_type || '多轮对话', version: 'V1', version_count: 1, status: 'enabled', configuration: draft?.configuration || {}, selected_version: { version: 'V1', configuration_v2: draft?.configuration || {} }, created_at: now(), updated_at: now() };
     updateStore(TEMPLATE_STORE, [], values => [item, ...values]);

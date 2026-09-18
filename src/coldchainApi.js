@@ -2,6 +2,8 @@ import { csvDataUrl, id, jsonDataUrl, loadSeed, mockResult, now, readStore, text
 import { COLDCHAIN_MODEL_CONFIGURATION } from './timeSeriesModelSeed';
 import { compileStage1, compileStage2, DEMO_FROZEN_EVENT, PREVIEW_RUNTIME, validateEventResult } from './timeSeriesPromptCompiler';
 
+import {templateRulesSnapshot} from './templateQualitySnapshot.js';
+import {trialQualityReport,templateLabelSnapshot} from './qualityResults.js';
 const TEMPLATE_STORE = 'coldchain-templates';
 const DRAFT_STORE = 'coldchain-drafts';
 const JOB_STORE = 'coldchain-jobs';
@@ -15,7 +17,7 @@ async function officialTemplate() {
     template_id: raw.template_id || 'COLDTPL-REEFER-INTL-MVP',
     name: raw.name || configuration.name || '冷藏集装箱国际运输（MVP）',
     description: raw.description || configuration.description || '冷链运输时序数据模板',
-    business_type: raw.business_type || configuration.business_type || '传感器时序',
+    business_type: raw.business_type || configuration.business_type || '冷藏集装箱物流',
     status: 'enabled', scope: raw.scope || 'official', version: raw.version || selected.version || 'V1', version_count: raw.versions?.length || 1,
     generation_rule_count: raw.generation_rule_count || (configuration.fields || []).reduce((sum, field) => sum + (field.generation_rules?.length || 0), 0) || 10,
     quality_rule_count: raw.quality_rule_count || (configuration.fields || []).reduce((sum, field) => sum + (field.quality_rules?.length || 0), 0) || 10,
@@ -140,7 +142,7 @@ export const coldchainApi = {
   },
   validateTemplate: configuration => mockResult({ valid: true, configuration, errors: [], warnings: [] }),
   createTemplate: configuration => {
-    const item = { template_id: id('COLDTPL'), name: configuration.name, description: configuration.description, business_type: configuration.business_type || '传感器时序', status: 'enabled', scope: 'custom', version: 'V1', version_count: 1, parameter_count: configuration.fields?.length || 0, generation_rule_count: (configuration.fields || []).reduce((sum, field) => sum + (field.generation_rules?.length || 0), 0), quality_rule_count: (configuration.fields || []).reduce((sum, field) => sum + (field.quality_rules?.length || 0), 0), coverage_profile_count: configuration.coverage?.profiles?.length || 0, configuration, created_at: now(), updated_at: now() };
+    const item = { template_id: id('COLDTPL'), name: configuration.name, description: configuration.description, business_type: configuration.business_type || '冷藏集装箱物流', status: 'enabled', scope: 'custom', version: 'V1', version_count: 1, parameter_count: configuration.fields?.length || 0, generation_rule_count: (configuration.fields || []).reduce((sum, field) => sum + (field.generation_rules?.length || 0), 0), quality_rule_count: (configuration.fields || []).reduce((sum, field) => sum + (field.quality_rules?.length || 0), 0), coverage_profile_count: configuration.coverage?.profiles?.length || 0, configuration, created_at: now(), updated_at: now() };
     updateStore(TEMPLATE_STORE, [], values => [item, ...values]);
     return mockResult(item);
   },
@@ -148,7 +150,7 @@ export const coldchainApi = {
     let drafts = readStore(DRAFT_STORE, []);
     if (!drafts.length) {
       const seed = await officialTemplate();
-      const configuration = { ...seed.configuration, name:'冷链运输异常事件模板（草稿）', description:'用于配置异常事件、输出参数及质检规则的时序模板草稿', business_type:'传感器时序', scope:'custom' };
+      const configuration = { ...seed.configuration, name:'冷链运输异常事件模板（草稿）', description:'用于配置异常事件、输出参数及质检规则的时序模板草稿', business_type:'冷藏集装箱物流', scope:'custom' };
       const draft = { draft_id:'COLDDRAFT-20260903-A81C2F', status:'draft', revision:3, configuration, name:configuration.name, description:configuration.description, business_type:configuration.business_type, field_count:configuration.fields?.length||10, coverage_profile_count:configuration.coverage?.profiles?.length||6, trial_status:'PASS', validation:{valid:true}, trial_run:{status:'PASS'}, created_at:'2026-09-03 09:00:00', updated_at:'2026-09-03 09:30:00' };
       updateStore(DRAFT_STORE, [], () => [draft]);
       drafts = [draft];
@@ -166,7 +168,7 @@ export const coldchainApi = {
     let saved;
     updateStore(DRAFT_STORE, [], values => values.map(item => {
       if (item.draft_id !== draftId) return item;
-      saved = { ...item, configuration, name: configuration.name, description: configuration.description, business_type: configuration.business_type || item.business_type || '传感器时序', revision: Number(item.revision || 0) + 1, validation: null, trial_run: null, updated_at: now() };
+      saved = { ...item, configuration, name: configuration.name, description: configuration.description, business_type: configuration.business_type || item.business_type || '冷藏集装箱物流', revision: Number(item.revision || 0) + 1, validation: null, trial_run: item.trial_run || null, updated_at: now() };
       return saved;
     }));
     return mockResult(saved);
@@ -175,13 +177,15 @@ export const coldchainApi = {
   trialTemplateDraft: (draftId, payload) => {
     const draft = readStore(DRAFT_STORE, []).find(item => item.draft_id === draftId);
     const trial = trialFor(draft, payload);
+    trial.rule_report=trialQualityReport(templateRulesSnapshot('时序数据',draft?.configuration||{}),{sampleCount:payload.sample_count,labels:templateLabelSnapshot(draft?.configuration,'时序数据'),templateId:draftId,templateVersion:String(draft?.revision||1)});
     updateStore(DRAFT_STORE, [], values => values.map(item => item.draft_id === draftId ? { ...item, trial_run: trial, validation: { valid: true }, updated_at: now() } : item));
     return mockResult(trial, 520);
   },
   publishTemplateDraft: draftId => {
     const draft = readStore(DRAFT_STORE, []).find(item => item.draft_id === draftId);
+    if(!draft)throw new Error('该时序模板草稿不存在或已经发布，请刷新模板中心');
     const config = draft?.configuration || {};
-    const item = { template_id: id('COLDTPL'), name: config.name || '新建时序模板', description: config.description || '', business_type: config.business_type || '传感器时序', status: 'enabled', scope: 'custom', version: 'V1', version_count: 1, parameter_count: config.fields?.length || 0, generation_rule_count: (config.fields || []).reduce((sum, field) => sum + (field.generation_rules?.length || 0), 0), quality_rule_count: (config.fields || []).reduce((sum, field) => sum + (field.quality_rules?.length || 0), 0), coverage_profile_count: config.coverage?.profiles?.length || 0, configuration: config, trial_status: draft?.trial_run?.status || 'PASS', created_at: now(), updated_at: now() };
+    const item = { template_id: id('COLDTPL'), name: config.name || '新建时序模板', description: config.description || '', business_type: config.business_type || '冷藏集装箱物流', status: 'enabled', scope: 'custom', version: 'V1', version_count: 1, parameter_count: config.fields?.length || 0, generation_rule_count: (config.fields || []).reduce((sum, field) => sum + (field.generation_rules?.length || 0), 0), quality_rule_count: (config.fields || []).reduce((sum, field) => sum + (field.quality_rules?.length || 0), 0), coverage_profile_count: config.coverage?.profiles?.length || 0, configuration: config, trial_status: draft?.trial_run?.status || 'PASS', created_at: now(), updated_at: now() };
     updateStore(TEMPLATE_STORE, [], values => [item, ...values]);
     updateStore(DRAFT_STORE, [], values => values.filter(value => value.draft_id !== draftId));
     return mockResult({ published_template: item }, 240);

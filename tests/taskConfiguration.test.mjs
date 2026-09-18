@@ -1,0 +1,15 @@
+import assert from 'node:assert/strict';
+import {resolveTaskConfiguration} from '../src/taskConfiguration.js';
+const base={id:'TASK-1',name:'测试',taskType:'数据质检',modality:'对话文本',businessType:'咨询问答',input:'测试数据 / V1'};
+const datasets=[{id:'DATASET-1',name:'测试数据',versions:[{version:'V1'}]}];
+const stored={sampleCount:23,generationModel:'saved'};
+assert.equal(resolveTaskConfiguration({...base,configSnapshot:stored}),stored);
+const legacy=resolveTaskConfiguration({...base,configSnapshot:{},backendJob:{config:{},parameters:{sampleCount:51,qualityModel:'legacy'}}},datasets);
+assert.equal(legacy.sampleCount,51);
+assert.equal(legacy.qualityModel,'legacy');
+assert.equal(legacy.inputDatasetId,'DATASET-1');
+const fallback=resolveTaskConfiguration(base,datasets);
+assert.ok(Object.keys(fallback).length);
+assert.equal(fallback.generationModel,undefined);
+assert.equal(resolveTaskConfiguration({...base,taskType:'数据合成'},datasets).inputDatasetId,null);
+console.log('PASS: stored snapshot preservation, empty object fallback, legacy parameters and historical records');

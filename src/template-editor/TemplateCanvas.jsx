@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useState, useRef } from 'react';
 import { Circle, Image as KonvaImage, Layer, Line, Rect, Stage, Text as KonvaText } from 'react-konva';
 import { moveBox, snapBox } from './templateGeometry';
 
@@ -50,7 +50,17 @@ function CornerHandles({ box, scale, onCorner }) {
 export default function TemplateCanvas({ draft, sourceUrl, visibility, privacyVisible = true, selection, onSelection, onDraftChange, zoom = 1, interactionLocks = {} }) {
   const sourceImage = useBrowserImage(sourceUrl);
   const canvas = draft.canvas;
-  const baseScale = Math.min(820 / canvas.width, 610 / canvas.height);
+  const shell=useRef(null);
+  const [viewport,setViewport]=useState({width:820,height:610});
+  useEffect(()=>{
+    const observer=new ResizeObserver(([entry])=>{
+      const width=Math.max(1,entry.contentRect.width),height=Math.max(1,entry.contentRect.height);
+      setViewport(previous=>previous.width===width&&previous.height===height?previous:{width,height});
+    });
+    if(shell.current)observer.observe(shell.current);
+    return()=>observer.disconnect();
+  },[]);
+  const baseScale = Math.min(viewport.width / canvas.width, viewport.height / canvas.height);
   const scale = baseScale * zoom;
   const width = Math.round(canvas.width * scale);
   const height = Math.round(canvas.height * scale);
@@ -99,7 +109,7 @@ export default function TemplateCanvas({ draft, sourceUrl, visibility, privacyVi
     ? draft.texts.find(item => item.id === selection.id)
     : selection?.kind === 'asset' ? draft.assets.find(item => item.id === selection.id) : null;
 
-  return <div className="template-canvas-shell">
+  return <div ref={shell} className="template-canvas-shell">
     <Stage width={width} height={height} className="template-stage" onMouseDown={event => {
       if (event.target === event.target.getStage()) onSelection(null);
     }}>

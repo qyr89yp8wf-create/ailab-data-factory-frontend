@@ -1,8 +1,12 @@
+import {FormQualityEditor} from './UnifiedQualityEditor';
+import {qualityConfig} from './qualityCatalog';
+import {FormModelConfig,ModelConfigField,ModelConfigGroup} from './ModelConfigField';
+import PrivacyPolicyEditor,{validatePrivacyPolicy,privacyFieldOptions} from './PrivacyPolicyEditor';
 import React, { useEffect, useMemo, useState } from 'react';
 import {
   Alert, Badge, Button, Card, Checkbox, Col, Collapse, Descriptions, Divider, Empty,
   Flex, Form, Input, InputNumber, Modal, Radio, Row, Select, Space, Spin, Steps, Switch, Table, Tabs, Tag,
-  Typography, message,
+  Tooltip, Typography, message,
 } from 'antd';
 import {
   ArrowLeftOutlined, ArrowRightOutlined, CheckCircleOutlined, CopyOutlined, DeleteOutlined,
@@ -14,7 +18,10 @@ import { compileStage1, compileStage2, DEMO_FROZEN_EVENT, PREVIEW_RUNTIME, sampl
 import { formatDateTime, nowDateTime } from './timeUtils';
 import { COLD_CHAIN_PARAMETER_OPTIONS } from './ColdChainMvp';
 import { TemplateActionButtons } from './TemplateActionButtons';
+import { BusinessTypeSelect } from './BusinessTypeSelect';
 
+import RuleQualityReport,{QualityReportDownloadButton} from './RuleQualityReport';
+import {templatePrivacyCheck} from './qualityResults';
 const { Title, Paragraph, Text } = Typography;
 const TRIAL_EVENT_LABELS = {
   normal:'正常运输', power_off_short:'短时断电', door_open:'开门',
@@ -123,48 +130,7 @@ const REFERENCE_OPTIONS = [...COLD_CHAIN_PARAMETER_OPTIONS,{label:'箱内空气 
 const QUALITY_TARGET_OPTIONS = [
   {label:'语义事件',value:'semantic_event'},{label:'时序参数',value:'temporal_parameters'},{label:'两者',value:'both'},
 ];
-const BASE_TIME_SERIES_RULES=[
-  ['BASE-READABLE','文件与记录可读取','确认文件可打开、样本记录可解析，损坏或截断数据不会进入后续检查。'],
-  ['BASE-STRUCTURE','数据结构完整','检查样本及嵌套对象是否符合模板约定的结构。'],
-  ['BASE-FIELD-TYPE','字段类型合法','检查字段定义与各时间点的实际值类型是否一致。'],
-  ['BASE-NUMERIC-VALID','数值有效','检查数值字段中是否存在 NaN、Inf 等非法数值。'],
-  ['BASE-ENUM','枚举值合法','检查状态、阶段和事件类型是否位于已配置枚举中。'],
-  ['BASE-MISSING','缺失策略符合配置','检查字段缺失及其表示方式是否符合模板配置。'],
-  ['BASE-HARD-RANGE','字段硬范围合法','仅按已明确配置的硬范围检查各时间点数值，不把正常范围当作硬范围。'],
-  ['BASE-UNIT-PRECISION','单位与精度符合配置','检查字段单位、数值精度与模板配置是否一致。'],
-  ['BASE-TIMESTAMP','时间戳合法','检查时间戳格式、时区与可解析性。'],
-  ['BASE-TIMELINE','时间轴与点数一致','检查索引顺序、重复时间、采样间隔、点数和观测窗口。'],
-  ['BASE-SAMPLE-ID','样本标识合法','检查样本 ID 格式及数据集内唯一性。'],
-  ['BASE-REFERENCE','引用有效','检查字段、事件、模板及配置引用是否存在且可用。'],
-  ['BASE-EVENT-PLAN','事件计划结构合法','检查阶段、事件区间、响应索引和已结构化适用约束。'],
-  ['BASE-FROZEN-PLAN','序列与冻结计划一致','检查初始值及已明确映射的阶段、活动事件标记。'],
-  ['BASE-LINEAGE','生成与处理血缘完整','检查当前生成方式要求的输入、配置、处理记录及引用。'],
-  ['BASE-EXACT-DUPLICATE','完全重复','在批次内按规范化样本内容检查完全重复，排除 ID 与血缘字段。'],
-  ['BASE-NEAR-DUPLICATE','近重复','在批次内形成高度相似序列的待复核候选，不自动删除。'],
-].map(([rule_id,name,description])=>({rule_id,name,description,target:'both',system:true}));
-const DEFAULT_BASE_RULE_IDS=BASE_TIME_SERIES_RULES.map(rule=>rule.rule_id);
-const PRIVACY_QUALITY_RULES=[
-  {rule_id:'DINGO-PII',name:'标准 PII',scope:'整条序列 + 每条记录',engine:'Dingo Rule',severity:'BLOCK',description:'检测手机号、身份证、邮箱、信用卡、护照、SSN 和 IPv4。'},
-  {rule_id:'FIXED-PRIVACY-PERSON',name:'个人身份隐私',scope:'整条序列 + 每条记录',engine:'系统规则 / 正则',severity:'BLOCK',description:'检查姓名、手机号和身份证号等个人身份信息。'},
-  {rule_id:'FIXED-PRIVACY-CONTACT',name:'联系与位置隐私',scope:'整条序列 + 每条记录',engine:'系统规则 / 正则',severity:'BLOCK',description:'检查详细地址、邮箱、车牌号及精确位置等信息。'},
-  {rule_id:'FIXED-PRIVACY-BUSINESS',name:'业务标识隐私',scope:'整条序列 + 每条记录',engine:'系统规则 / 正则',severity:'BLOCK',description:'检查真实运单号、客户编号和企业内部账号。'},
-  {rule_id:'FIXED-PRIVACY-CREDENTIAL',name:'账号与密钥安全',scope:'整条序列 + 每条记录',engine:'凭据扫描',severity:'BLOCK',description:'检查 API Key、Token、Cookie 和密码；报告只保留类型与掩码预览。'},
-].map(rule=>({...rule,target:'both',system:true,enabled:true,required:true}));
-const ENGINE_QUALITY_RULES={
-  coldchain_physics_v1:[
-    {rule_id:'CC-QC-POWER-CONSISTENCY',name:'断电状态一致性',description:'核对供电状态、断电事件区间及恢复时点是否一致。',required:true,fields:['power_status','transport_event']},
-    {rule_id:'CC-QC-TEMP-RESPONSE',name:'温度响应与恢复',description:'检查断电或开门后的温度响应、滞后及恢复过程是否符合冻结计划。',recommended:true,fields:['return_air_temperature','cargo_temperature']},
-    {rule_id:'CC-QC-SENSOR-BIAS',name:'传感器偏移一致性',description:'检查传感器偏移是否只作用于读数，并与真实温度变化区分。',recommended:true,fields:['return_air_temperature','cargo_temperature']},
-    {rule_id:'CC-QC-STAGE-GPS',name:'运输阶段与定位一致性',description:'检查运输阶段、时间轴和定位轨迹之间的对应关系。',recommended:true,fields:['gps','transport_event']},
-  ],
-  generic_timeseries_engine_v1:[],
-};
-const DEFAULT_MODEL_QUALITY_RULES=[{
-  rule_id:'QC-SCENE-POWER-RESPONSE',name:'断电后的温度响应',enabled:true,mode:'semantic',target_fields:['power_status','return_air_temperature','cargo_temperature'],
-  condition_scope:'本条存在短时断电时，检查断电期间及各字段对应的恢复窗口。',
-  acceptance_requirement:'供电状态与断电区间一致；箱温和货物温度的响应幅度、延迟及恢复符合本条冻结计划，不出现无依据的瞬间恢复。',
-  exceptions_tolerance:'不要求货物一定超温；允许货物恢复跨阶段，但须符合本条恢复窗口。',on_failure:'review',python_code:'def validate(series, context):\n    return validate_power_response(series, context)',
-}];
+import {BASE_TIME_SERIES_RULES,DEFAULT_BASE_RULE_IDS,PRIVACY_QUALITY_RULES,ENGINE_QUALITY_RULES,DEFAULT_MODEL_QUALITY_RULES} from './timeSeriesQualityCatalog';
 const DEFAULT_COVERAGE_PROMPT=`根据最终时序数据、时间轴及本条事件计划，核验本样本实际体现的主要事件类型。仅从已配置枚举中选择，一期每条样本最多确认一个主要事件标签。
 
 检查事件对应字段、发生区间及响应表现是否支持本条计划。不能仅复制采样目标、事件说明或 active_event_type 列作为核验结果。证据不足返回无法判定；计划与数据矛盾时说明冲突，不强行确认目标标签。
@@ -173,7 +139,7 @@ const DEFAULT_COVERAGE_PROMPT=`根据最终时序数据、时间轴及本条事�
 
 function EventCandidatesEditor({ form }) {
   const candidates=Form.useWatch('eventCandidates',form)||[];
-  return <Form.List name="eventCandidates">{(fields,{add,remove})=><>
+  return <Form.List name="eventCandidates">{(fields,{add,remove})=><><div className="template-section-heading"><strong>异常事件</strong><Button type="primary" icon={<PlusOutlined/>} onClick={()=>add({event_id:`custom_event_${Date.now()}`,name:'',prompt:'',selected:true,custom:true})}>添加自定义异常事件</Button></div>
     <Row gutter={[12,12]}>{fields.map((field,index)=>{
       const item=candidates[index]||{};
       const selected=item.selected!==false;
@@ -185,7 +151,7 @@ function EventCandidatesEditor({ form }) {
         </>}
       </Card></Col>;
     })}</Row>
-    <Button type="dashed" block icon={<PlusOutlined/>} onClick={()=>add({event_id:`custom_event_${Date.now()}`,name:'',prompt:'',selected:true,custom:true})}>添加自定义异常事件</Button>
+    
   </>}</Form.List>;
 }
 
@@ -195,7 +161,7 @@ function EventSamplingDimensionsEditor({ form }) {
   const advanced=advancedIndex==null?null:dimensions[advancedIndex];
   return <>
     <Alert type="info" showIcon message="定义事件的可采样空间" description="每个维度至少维护一个枚举值；选项占比在创建合成任务时配置。系统提供的示例维度也可以删除或改名。"/>
-    <Form.List name="eventDimensions" rules={[{validator:(_,items)=>items?.length?Promise.resolve():Promise.reject(new Error('请至少配置一个事件采样维度'))}]}>{(fields,{add,remove},{errors})=><>
+    <Form.List name="eventDimensions" rules={[{validator:(_,items)=>items?.length?Promise.resolve():Promise.reject(new Error('请至少配置一个事件采样维度'))}]}>{(fields,{add,remove},{errors})=><><div className="template-section-heading"><strong>事件采样维度</strong><Button type="primary" icon={<PlusOutlined/>} onClick={()=>add({dimension_id:stableConfigId('dim'),option_ids:{},name:'',values:[],description:'',applicability_conditions:'',prohibited_conditions:''})}>新增维度</Button></div>
       <Table className="section-title" rowKey="key" pagination={false} dataSource={fields} columns={[
         {title:'维度名称',width:'25%',render:(_,field,index)=><Form.Item name={[field.name,'name']} rules={[{required:true,whitespace:true,message:'请输入维度名称'}]}><Input disabled={index===0} placeholder="例如：运行阶段" suffix={index===0?<Tag>系统必填</Tag>:null}/></Form.Item>},
         {title:'维度可选值',render:(_,field)=><Form.Item name={[field.name,'values']} rules={[{validator:(_,values)=>Array.isArray(values)&&values.filter(value=>String(value||'').trim()).length>=1?Promise.resolve():Promise.reject(new Error('至少维护 1 个枚举值'))}]}><Select mode="tags" tokenSeparators={[',','，']} placeholder="输入枚举值后按回车"/></Form.Item>},
@@ -203,7 +169,7 @@ function EventSamplingDimensionsEditor({ form }) {
         {title:'操作',width:80,render:(_,field,index)=>index===0?<Text type="secondary">不可删除</Text>:<Button type="text" danger icon={<DeleteOutlined/>} aria-label="删除维度" onClick={()=>remove(field.name)}/>},
       ]}/>
       <Form.ErrorList errors={errors}/>
-      <Button type="dashed" block icon={<PlusOutlined/>} onClick={()=>add({dimension_id:stableConfigId('dim'),option_ids:{},name:'',values:[],description:'',applicability_conditions:'',prohibited_conditions:''})}>新增维度</Button>
+      
     </>}</Form.List>
     <Modal title={`高级配置${advanced?.name?`：${advanced.name}`:''}`} open={advancedIndex!=null} onCancel={()=>setAdvancedIndex(null)} onOk={()=>setAdvancedIndex(null)} okText="完成" cancelText="取消" destroyOnHidden>
       {advancedIndex!=null&&<>
@@ -278,10 +244,10 @@ function FieldRuleEditor({ fieldIndex }) {
       <Row gutter={16}>
         <Col span={6}><Form.Item name={[fieldIndex,'label']} label="字段名称" rules={[{required:true,whitespace:true}]}><Input placeholder="例如：回风温度"/></Form.Item></Col>
         <Col span={6}><Form.Item name={[fieldIndex,'field_id']} label="字段 ID" rules={[{required:true,pattern:/^[a-z][a-z0-9_]{1,63}$/,message:'使用小写字母、数字和下划线'}]}><Input placeholder="例如：return_air_temperature"/></Form.Item></Col>
-        <Col span={6}><Form.Item name={[fieldIndex,'type']} label="数据类型" rules={[{required:true}]}><Select options={PARAMETER_TYPES}/></Form.Item></Col>
+        <Col span={6}><Form.Item name={[fieldIndex,'type']} label="数据类型" rules={[{required:true}]}><Select placeholder="请选择数据类型" options={PARAMETER_TYPES}/></Form.Item></Col>
         <Col span={6}><Form.Item name={[fieldIndex,'unit']} label="单位" rules={[{max:40}]}><Input placeholder="例如：℃、%、km/h"/></Form.Item></Col>
       </Row>
-      <Row gutter={16} align="bottom"><Col span={10}><Form.Item name={[fieldIndex,'enum_values']} label="枚举值（可选）" extra="离散字段维护允许值；输入后按回车。"><Select mode="tags" tokenSeparators={[',','，']} placeholder="例如：road、port、sea"/></Form.Item></Col><Col span={5}><Form.Item name={[fieldIndex,'nullable']} label="允许缺失" valuePropName="checked"><Switch checkedChildren="允许" unCheckedChildren="不允许"/></Form.Item></Col>{['number','integer'].includes(type)&&<><Col span={4}><Form.Item name={[fieldIndex,'value_schema','minimum']} label="全局最小值"><InputNumber style={{width:'100%'}}/></Form.Item></Col><Col span={4}><Form.Item name={[fieldIndex,'value_schema','maximum']} label="全局最大值"><InputNumber style={{width:'100%'}}/></Form.Item></Col></>}</Row>
+      <Row gutter={16} align="bottom"><Col span={10}><Form.Item name={[fieldIndex,'enum_values']} label="枚举值（可选）" extra="离散字段维护允许值；输入后按回车。"><Select mode="tags" tokenSeparators={[',','，']} placeholder="例如：road、port、sea"/></Form.Item></Col><Col span={5}><Form.Item name={[fieldIndex,'nullable']} label="允许缺失" valuePropName="checked"><Switch checkedChildren="允许" unCheckedChildren="不允许"/></Form.Item></Col>{['number','integer'].includes(type)&&<><Col span={4}><Form.Item name={[fieldIndex,'value_schema','minimum']} label="全局最小值"><InputNumber placeholder="请输入全局最小值" style={{width:'100%'}}/></Form.Item></Col><Col span={4}><Form.Item name={[fieldIndex,'value_schema','maximum']} label="全局最大值"><InputNumber placeholder="请输入全局最大值" style={{width:'100%'}}/></Form.Item></Col></>}</Row>
       <Divider orientation="left">字段生成 Prompt</Divider>
       <Form.Item name={[fieldIndex,'overall_change_rules']} label="整体变化规则" rules={[{required:true,whitespace:true,message:'请填写整体变化规则'}]} extra="填写初始值、取值范围、正常趋势、周期和日常波动。"><Input.TextArea rows={4} placeholder="初始4～6℃；正常时围绕4℃小幅波动"/></Form.Item>
       <Form.Item name={[fieldIndex,'stage_event_rules']} label="阶段、事件与关键时点规则（可选）" extra="填写特定区间内如何变化、结束后如何恢复，或某时点的要求。"><Input.TextArea rows={3} placeholder="开门期间向环境温度靠近；关门后逐渐恢复"/></Form.Item>
@@ -325,7 +291,7 @@ function EngineGenerationEditor({ form }) {
     <Form.Item name="engineSelectedFields" hidden><HiddenFormValue/></Form.Item>
     <Form.Item name="engineSelectedEvents" hidden><HiddenFormValue/></Form.Item>
     <Form.Item name="engineEventOverrides" hidden><HiddenFormValue/></Form.Item>
-    <Form.Item name="generationEngineId" label="生成引擎" rules={[{required:true,message:'请选择已接入的生成引擎'}]}><Select options={ENGINE_CATALOG.map(({value,label})=>({value,label}))}/></Form.Item>
+    <Form.Item name="generationEngineId" label="生成引擎" rules={[{required:true,message:'请选择已接入的生成引擎'}]}><Select placeholder="请选择生成引擎" options={ENGINE_CATALOG.map(({value,label})=>({value,label}))}/></Form.Item>
     <Divider orientation="left">引擎支持的事件</Divider>
     <Table rowKey="english_name" pagination={false} dataSource={eventRows} columns={[
       {title:'中文名',dataIndex:'chinese_name'},{title:'英文名',dataIndex:'english_name',render:value=><Text code>{value}</Text>},{title:'生成规则',dataIndex:'generation_rule'},{title:'高级配置',render:(_,row)=><Button onClick={()=>openAdvanced(row.english_name)}>配置</Button>},{title:'操作',width:80,render:(_,row)=><Checkbox checked={selectedEvents.includes(row.english_name)} onChange={event=>toggle('engineSelectedEvents',row.english_name,event.target.checked)}/>} ]}/>
@@ -333,9 +299,9 @@ function EngineGenerationEditor({ form }) {
     <Table rowKey="english_name" pagination={false} dataSource={fieldRows} columns={[
       {title:'中文名',dataIndex:'chinese_name'},{title:'英文名',dataIndex:'english_name',render:value=><Text code>{value}</Text>},{title:'生成规则',dataIndex:'generation_rule'},{title:'操作',width:80,render:(_,row)=><Checkbox checked={selectedFields.includes(row.english_name)} onChange={event=>toggle('engineSelectedFields',row.english_name,event.target.checked)}/>} ]}/>
     <Modal title={`事件高级配置：${eventRows.find(item=>item.english_name===advancedEvent)?.chinese_name||''}`} open={Boolean(advancedEvent)} onCancel={()=>setAdvancedEvent(null)} onOk={()=>setAdvancedEvent(null)} okText="完成" cancelText="取消">
-      <Form.Item label="允许发生阶段" required><Input.TextArea rows={3} value={currentOverride?.allowed_stages||''} onChange={event=>updateOverride('allowed_stages',event.target.value)}/></Form.Item>
+      <Form.Item label="允许发生阶段" required><Input.TextArea placeholder="请输入允许发生阶段" rows={3} value={currentOverride?.allowed_stages||''} onChange={event=>updateOverride('allowed_stages',event.target.value)}/></Form.Item>
       <Form.Item label="持续时间" required><Input value={currentOverride?.duration||''} onChange={event=>updateOverride('duration',event.target.value)} placeholder="例如：5～15分钟"/></Form.Item>
-      <Form.Item label="影响字段" required><Select mode="multiple" value={String(currentOverride?.affected_fields||'').split(/[,，、]/).filter(Boolean)} options={engine.fields.map(value=>({value,label:value}))} onChange={value=>updateOverride('affected_fields',value.join(','))}/></Form.Item>
+      <Form.Item label="影响字段" required><Select placeholder="请选择影响字段" mode="multiple" value={String(currentOverride?.affected_fields||'').split(/[,，、]/).filter(Boolean)} options={engine.fields.map(value=>({value,label:value}))} onChange={value=>updateOverride('affected_fields',value.join(','))}/></Form.Item>
     </Modal>
   </Card>;
 }
@@ -345,82 +311,34 @@ function ParameterQualityRuleEditor({ field, fieldIndex, form }) {
   return <Card size="small" className="coldchain-parameter-card">
     <Row gutter={16}><Col span={8}><Form.Item label="规则名称"><Input value={`${field.label||field.field_id}质检`} disabled/></Form.Item></Col><Col span={8}><Form.Item label="规则 ID"><Input value={`QC-${String(field.field_id||'FIELD').toUpperCase()}`} disabled/></Form.Item></Col><Col span={8}><Form.Item label="检查对象"><Input value={field.label||field.field_id} disabled/></Form.Item></Col></Row>
     <Form.Item name={[fieldIndex,'quality_mode']} label="检查方式" rules={[{required:true}]}><Radio.Group optionType="button" buttonStyle="solid" options={[{label:'函数判断',value:'function'},{label:'语义判断',value:'semantic'}]}/></Form.Item>
-    {mode==='function'?<Form.Item name={[fieldIndex,'quality_python']} label="Python 判断函数" rules={[{required:true,whitespace:true}]} extra="统一返回 true 或 false。"><Input.TextArea className="coldchain-code-textarea" rows={8} spellCheck={false}/></Form.Item>:<><Form.Item name={[fieldIndex,'quality_threshold']} label="语义阈值" rules={[{required:true}]}><InputNumber min={0} max={1} step={0.01} style={{width:220}}/></Form.Item><Form.Item name={[fieldIndex,'quality_prompt']} label="语义判断 Prompt" rules={[{required:true,whitespace:true}]}><Input.TextArea rows={6}/></Form.Item><Row gutter={12}><Col span={12}><Form.Item name={[fieldIndex,'quality_positive_example']} label="通过示例（可选）"><Input.TextArea rows={2}/></Form.Item></Col><Col span={12}><Form.Item name={[fieldIndex,'quality_negative_example']} label="不通过示例（可选）"><Input.TextArea rows={2}/></Form.Item></Col></Row></>}
+    {mode==='function'?<Form.Item name={[fieldIndex,'quality_python']} label="Python 判断函数" rules={[{required:true,whitespace:true}]} extra="统一返回 true 或 false。"><Input.TextArea placeholder="填写判断函数，返回 true 或 false" className="coldchain-code-textarea" rows={8} spellCheck={false}/></Form.Item>:<><Form.Item name={[fieldIndex,'quality_threshold']} label="语义阈值" rules={[{required:true}]}><InputNumber placeholder="请输入语义阈值（0～1）" min={0} max={1} step={0.01} style={{width:220}}/></Form.Item><Form.Item name={[fieldIndex,'quality_prompt']} label="语义判断 Prompt" rules={[{required:true,whitespace:true}]}><Input.TextArea placeholder="描述语义判断 Prompt，说明目标、约束和输出要求" rows={6}/></Form.Item><Row gutter={12}><Col span={12}><Form.Item name={[fieldIndex,'quality_positive_example']} label="通过示例（可选）"><Input.TextArea placeholder="请输入通过示例（可选）" rows={2}/></Form.Item></Col><Col span={12}><Form.Item name={[fieldIndex,'quality_negative_example']} label="不通过示例（可选）"><Input.TextArea placeholder="请输入不通过示例（可选）" rows={2}/></Form.Item></Col></Row></>}
   </Card>;
 }
 
 function GlobalQualityRuleEditor({ rule, field, index, remove, form }) {
   const mode=Form.useWatch(['qualityRules',index,'mode'],form)||'function';
   return <Card size="small" className="section-title conversation-quality-rule" title={<Space><Text strong>{rule.name||'新质检规则'}</Text>{rule.system&&<Tag color="blue">预置规则</Tag>}</Space>} extra={<Space><Form.Item name={[field.name,'enabled']} valuePropName="checked" noStyle><Switch checkedChildren="启用" unCheckedChildren="停用"/></Form.Item><Button type="text" danger icon={<DeleteOutlined/>} onClick={()=>remove(field.name)}>删除</Button></Space>}>
-    <Row gutter={16}><Col span={8}><Form.Item name={[field.name,'name']} label="规则名称" rules={[{required:true,whitespace:true}]}><Input/></Form.Item></Col><Col span={8}><Form.Item name={[field.name,'rule_id']} label="规则 ID"><Input disabled/></Form.Item></Col><Col span={8}><Form.Item name={[field.name,'target']} label="检查对象" rules={[{required:true}]}><Select options={QUALITY_TARGET_OPTIONS}/></Form.Item></Col></Row>
+    <Row gutter={16}><Col span={8}><Form.Item name={[field.name,'name']} label="规则名称" rules={[{required:true,whitespace:true}]}><Input placeholder="请输入规则名称"/></Form.Item></Col><Col span={8}><Form.Item name={[field.name,'rule_id']} label="规则 ID"><Input disabled/></Form.Item></Col><Col span={8}><Form.Item name={[field.name,'target']} label="检查对象" rules={[{required:true}]}><Select placeholder="请选择检查对象" options={QUALITY_TARGET_OPTIONS}/></Form.Item></Col></Row>
     <Form.Item name={[field.name,'mode']} label="检查方式" rules={[{required:true}]}><Radio.Group optionType="button" buttonStyle="solid" options={[{label:'函数判断',value:'function'},{label:'语义判断',value:'semantic'}]}/></Form.Item>
-    {mode==='semantic'?<><Form.Item name={[field.name,'threshold']} label="语义阈值" rules={[{required:true}]}><InputNumber min={0} max={1} step={0.01} style={{width:220}}/></Form.Item><Form.Item name={[field.name,'prompt']} label="语义判断 Prompt" rules={[{required:true,whitespace:true}]}><Input.TextArea rows={6}/></Form.Item><Row gutter={12}><Col span={12}><Form.Item name={[field.name,'positive_example']} label="通过示例（可选）"><Input.TextArea rows={2}/></Form.Item></Col><Col span={12}><Form.Item name={[field.name,'negative_example']} label="不通过示例（可选）"><Input.TextArea rows={2}/></Form.Item></Col></Row></>:<Form.Item name={[field.name,'python_code']} label="Python 判断函数" rules={[{required:true,whitespace:true}]} extra="统一返回 true 或 false。"><Input.TextArea className="coldchain-code-textarea" rows={8} spellCheck={false}/></Form.Item>}
+    {mode==='semantic'?<><Form.Item name={[field.name,'threshold']} label="语义阈值" rules={[{required:true}]}><InputNumber placeholder="请输入语义阈值（0～1）" min={0} max={1} step={0.01} style={{width:220}}/></Form.Item><Form.Item name={[field.name,'prompt']} label="语义判断 Prompt" rules={[{required:true,whitespace:true}]}><Input.TextArea placeholder="描述语义判断 Prompt，说明目标、约束和输出要求" rows={6}/></Form.Item><Row gutter={12}><Col span={12}><Form.Item name={[field.name,'positive_example']} label="通过示例（可选）"><Input.TextArea placeholder="请输入通过示例（可选）" rows={2}/></Form.Item></Col><Col span={12}><Form.Item name={[field.name,'negative_example']} label="不通过示例（可选）"><Input.TextArea placeholder="请输入不通过示例（可选）" rows={2}/></Form.Item></Col></Row></>:<Form.Item name={[field.name,'python_code']} label="Python 判断函数" rules={[{required:true,whitespace:true}]} extra="统一返回 true 或 false。"><Input.TextArea placeholder="填写判断函数，返回 true 或 false" className="coldchain-code-textarea" rows={8} spellCheck={false}/></Form.Item>}
   </Card>;
 }
 
 function ModelSceneQualityEditor({ field, index, remove, form, fieldOptions }) {
   const mode=Form.useWatch(['modelQualityRules',index,'mode'],form)||'semantic';
   const enabled=Form.useWatch(['modelQualityRules',index,'enabled'],form)!==false;
-  return <Card size="small" className="section-title conversation-quality-rule" title={<Space><Text strong>{form.getFieldValue(['modelQualityRules',index,'name'])||'新场景规则'}</Text><Tag color="purple">模型评审</Tag></Space>} extra={<Space><Form.Item name={[field.name,'enabled']} valuePropName="checked" noStyle><Switch checkedChildren="启用" unCheckedChildren="停用"/></Form.Item><Button type="text" danger icon={<DeleteOutlined/>} onClick={()=>remove(field.name)}>删除</Button></Space>}>
+  return <Card size="small" className="section-title conversation-quality-rule" title={<Space><Text strong>{form.getFieldValue(['modelQualityRules',index,'name'])||'新场景规则'}</Text></Space>} extra={<Space><Form.Item name={[field.name,'enabled']} valuePropName="checked" noStyle><Switch checkedChildren="启用" unCheckedChildren="停用"/></Form.Item><Button type="text" danger icon={<DeleteOutlined/>} onClick={()=>remove(field.name)}>删除</Button></Space>}>
     <Form.Item name={[field.name,'rule_id']} hidden><Input/></Form.Item>
     <Row gutter={16}><Col span={10}><Form.Item name={[field.name,'name']} label="规则名称" rules={enabled?[{required:true,whitespace:true,message:'请输入规则名称'}]:[]}><Input placeholder="例如：断电后的温度响应"/></Form.Item></Col><Col span={14}><Form.Item name={[field.name,'target_fields']} label="检查对象" rules={enabled?[{required:true,type:'array',min:1,message:'至少选择一个检查字段'}]:[]}><Select mode="multiple" options={fieldOptions} placeholder="选择第二步已启用字段"/></Form.Item></Col></Row>
     <Form.Item name={[field.name,'condition_scope']} label="检查条件与范围 Prompt" rules={enabled?[{required:true,whitespace:true,message:'请填写检查条件与范围'}]:[]} extra="说明何时适用，以及检查整段、事件期间还是各字段自己的恢复窗口。"><Input.TextArea rows={3} placeholder="所有样本，整条序列"/></Form.Item>
     <Form.Item name={[field.name,'acceptance_requirement']} label="合格判定要求 Prompt" rules={enabled?[{required:true,whitespace:true,message:'请填写合格判定要求'}]:[]} extra="描述应满足的趋势、关联、响应、阈值或结果，不需要填写样本索引。"><Input.TextArea rows={4} placeholder="说明模型应依据实际序列判断哪些表现符合要求"/></Form.Item>
-    <Form.Item name={[field.name,'exceptions_tolerance']} label="例外与容差 Prompt（可选）" extra="填写允许偏差，以及证据不足时不能直接判错的情况。"><Input.TextArea rows={3}/></Form.Item>
-    <Collapse ghost items={[{key:'advanced',label:'高级设置',children:<><Row gutter={16}><Col span={12}><Form.Item name={[field.name,'on_failure']} label="不满足时处理"><Select options={[{value:'review',label:'进入待复核'},{value:'reject',label:'判定不通过'}]}/></Form.Item></Col><Col span={12}><Form.Item name={[field.name,'mode']} label="检查方式"><Radio.Group options={[{value:'semantic',label:'模型评审'},{value:'function',label:'Python 函数'}]}/></Form.Item></Col></Row>{mode==='function'&&<Form.Item name={[field.name,'python_code']} label="Python 判断函数" rules={enabled?[{required:true,whitespace:true,message:'请填写判断函数'}]:[]} extra="沿用已有函数返回协议；三段文本作为规则说明保留，不再发起模型评审。"><Input.TextArea className="coldchain-code-textarea" rows={8} spellCheck={false}/></Form.Item>}</>}]} />
+    <Form.Item name={[field.name,'exceptions_tolerance']} label="例外与容差 Prompt（可选）" extra="填写允许偏差，以及证据不足时不能直接判错的情况。"><Input.TextArea placeholder="描述例外与容差 Prompt（可选），说明目标、约束和输出要求" rows={3}/></Form.Item>
+    <Collapse ghost items={[{key:'advanced',label:'高级设置',children:<><Row gutter={16}><Col span={12}><Form.Item name={[field.name,'on_failure']} label="不满足时处理"><Select placeholder="请选择不满足时处理" options={[{value:'review',label:'进入待复核'},{value:'reject',label:'判定不通过'}]}/></Form.Item></Col><Col span={12}><Form.Item name={[field.name,'mode']} label="检查方式"><Radio.Group options={[{value:'semantic',label:'模型评审'},{value:'function',label:'Python 函数'}]}/></Form.Item></Col></Row>{mode==='function'&&<Form.Item name={[field.name,'python_code']} label="Python 判断函数" rules={enabled?[{required:true,whitespace:true,message:'请填写判断函数'}]:[]} extra="沿用已有函数返回协议；三段文本作为规则说明保留，不再发起模型评审。"><Input.TextArea placeholder="填写判断函数，返回 true 或 false" className="coldchain-code-textarea" rows={8} spellCheck={false}/></Form.Item>}</>}]} />
   </Card>;
 }
 
-function QualityConfiguration({ form, fields, generationMethod, labelsEnabled }) {
-  const engineId=Form.useWatch('generationEngineId',form)||'coldchain_physics_v1';
-  const selectedEngineFields=Form.useWatch('engineSelectedFields',form)||[];
-  const engineRules=ENGINE_QUALITY_RULES[engineId]||[];
-  const fieldOptions=(generationMethod==='engine'
-    ? selectedEngineFields.map(fieldId=>({value:fieldId,label:COLD_CHAIN_PARAMETER_OPTIONS.find(item=>item.value===fieldId)?.label||fieldId}))
-    : fields.filter(item=>item.enabled!==false).map(item=>({value:item.field_id,label:item.label||item.field_id}))).filter(item=>item.value);
-  const engine=ENGINE_CATALOG.find(item=>item.value===engineId);
-  const baseColumns=[
-    {title:'启用',width:72,render:(_,rule)=><Checkbox value={rule.rule_id}/>},
-    {title:'规则名称',dataIndex:'name',width:260,render:value=><Text strong>{value}</Text>},
-    {title:'检查说明',dataIndex:'description'},
-  ];
-  const privacyColumns=[
-    {title:'启用',width:72,render:()=> <Checkbox checked disabled/>},
-    {title:'规则包 / 检测项',dataIndex:'name',width:240,render:(value,row)=><Space direction="vertical" size={0}><Text strong>{value}</Text><Text type="secondary" style={{fontSize:12}}>{row.rule_id}</Text></Space>},
-    {title:'检查范围',dataIndex:'scope',width:180,render:value=><Tag color="geekblue">{value}</Tag>},
-    {title:'检测方法',dataIndex:'engine',width:170},
-    {title:'处理级别',dataIndex:'severity',width:100,render:value=><Tag color="red">{value}</Tag>},
-    {title:'说明',dataIndex:'description'},
-  ];
-  const sectionItems=[
-    {key:'base',label:<Space><Text strong>基础质检</Text><Tag color="green">{BASE_TIME_SERIES_RULES.length} 个规则</Tag></Space>,children:<><Flex justify="flex-end"><Space><Button type="link" onClick={()=>form.setFieldValue('baseQualityRuleIds',DEFAULT_BASE_RULE_IDS)}>全选</Button><Button type="link" onClick={()=>form.setFieldValue('baseQualityRuleIds',[])}>取消全选</Button></Space></Flex><Form.Item name="baseQualityRuleIds" style={{marginBottom:0}}><Checkbox.Group style={{width:'100%'}}><Table rowKey="rule_id" size="small" pagination={false} dataSource={BASE_TIME_SERIES_RULES} columns={baseColumns}/></Checkbox.Group></Form.Item></>},
-    {key:'privacy',label:<Space><Text strong>隐私质检</Text><Tag color="purple">强制启用 · {PRIVACY_QUALITY_RULES.length} 项</Tag></Space>,children:<><Alert type="warning" showIcon message="Dingo PII 负责识别，系统脱敏策略负责处置" description="所有隐私规则强制启用；命中后只保留类型、记录位置和掩码预览，原文默认不进入报告。"/><Table className="section-title" rowKey="rule_id" size="small" pagination={false} dataSource={PRIVACY_QUALITY_RULES} columns={privacyColumns} scroll={{x:960}}/></>},
-    {key:'scene',label:<Space><Text strong>场景质检</Text><Tag color={generationMethod==='model'?'purple':'blue'}>{generationMethod==='model'?'模型生成':'引擎生成'}</Tag></Space>,children:<>
-      {generationMethod==='engine'?<>
-        <Descriptions bordered size="small" column={2} items={[{key:'engine',label:'所选引擎',children:engine?.label||engineId},{key:'fields',label:'已映射字段',children:selectedEngineFields.length?selectedEngineFields.map(id=><Tag key={id}>{COLD_CHAIN_PARAMETER_OPTIONS.find(item=>item.value===id)?.label||id}</Tag>):<Text type="danger">尚未映射字段</Text>}]}/>
-        {!engineRules.length?<Empty className="section-title" description="引擎尚未提供场景质检规则"/>:<Form.Item name="engineQualityRuleIds" className="section-title"><Checkbox.Group style={{width:'100%'}}><Table pagination={false} rowKey="rule_id" dataSource={engineRules} columns={[
-          {title:'启用',width:72,render:(_,rule)=><Checkbox value={rule.rule_id} disabled={rule.required}/>},
-          {title:'规则名称',dataIndex:'name',width:180,render:(value,rule)=><Space><Text strong>{value}</Text>{rule.required?<Tag color="red">必检</Tag>:<Tag color="blue">推荐</Tag>}</Space>},
-          {title:'检查说明',dataIndex:'description'},
-          {title:'检查对象',render:(_,rule)=>rule.fields.map(id=><Tag key={id} color={selectedEngineFields.includes(id)?'blue':'default'}>{COLD_CHAIN_PARAMETER_OPTIONS.find(item=>item.value===id)?.label||id}</Tag>)},
-          {title:'判定参数',width:150,render:()=><Text type="secondary">使用引擎默认配置</Text>},
-        ]}/></Checkbox.Group></Form.Item>}
-        <Alert type="info" showIcon message="规则消费实际生成结果、冻结计划和 runtime" description="必要字段缺失属于配置错误；没有适用事件记录为“不适用”，不会回退为通过。"/>
-      </>:<>
-        <Alert type="info" showIcon message="用户配置场景质检 Prompt，默认由模型评审" description="系统会把三段 Prompt、选中字段的实际序列、时间轴、适用事件计划和字段说明一起编译为评审请求；输入不足时返回无法判定。"/>
-        <Form.List name="modelQualityRules">{(ruleFields,{add,remove})=><>{ruleFields.map((field,index)=><ModelSceneQualityEditor key={field.key} field={field} index={index} remove={remove} form={form} fieldOptions={fieldOptions}/>)}<Button type="dashed" block icon={<PlusOutlined/>} onClick={()=>add({rule_id:stableConfigId('QC-SCENE'),name:'',enabled:true,mode:'semantic',target_fields:[],condition_scope:'所有样本，整条序列',acceptance_requirement:'',exceptions_tolerance:'',on_failure:'review',python_code:''})}>新增场景规则</Button></>}</Form.List>
-      </>}
-    </>},
-    {key:'classification',label:<Space><Text strong>分类标签</Text><Tag color="blue">独立功能</Tag></Space>,children:<>
-      <Flex justify="flex-end"><Form.Item name="labelsEnabled" valuePropName="checked" noStyle><Switch checkedChildren="启用" unCheckedChildren="停用"/></Form.Item></Flex>
-      {!labelsEnabled?<Alert type="info" showIcon message="分类标签未启用" description="后续样本不执行分类；已有内容和历史标签保留，重新开启后可继续编辑。"/>:<>
-        <Form.Item name="coverageLabelsMarkdown" label="标签枚举值" rules={[{required:true,whitespace:true},{max:2000}]} extra="每行填写“内部值 | 中文名称”。"><Input.TextArea rows={8}/></Form.Item>
-        <Form.Item name="coverageLabelingPrompt" label="分类判定要求" rules={[{required:true,whitespace:true},{max:4000}]}><Input.TextArea rows={8}/></Form.Item>
-        <Alert type="info" showIcon message="覆盖率与分布分析是独立功能" description="模板页不填写目标数量；有效覆盖依据生成后已核验标签统计，不使用采样目标冒充实际覆盖。"/>
-      </>}
-    </>},
-  ];
-  return <Collapse className="section-title" defaultActiveKey={['base','privacy','scene','classification']} items={sectionItems}/>;
+function QualityConfiguration({ form, fields, generationMethod, labelsEnabled,readOnly }) {
+ return <FormQualityEditor form={form} modality="时序数据" readOnly={readOnly}/>;
 }
 
 function SynthesisPromptPreview({ form }) {
@@ -428,8 +346,8 @@ function SynthesisPromptPreview({ form }) {
   const values=form.getFieldsValue(true)||{};
   const generationMethod=values.generationMethod||'engine';
   const [seed,setSeed]=useState(20260905);
-  const [demoBound,setDemoBound]=useState(true);
-  const template=useMemo(()=>({fields:(values.fields||[]).filter(Boolean),event_generation:{scene_config:{business_scene_description:values.businessSceneDescription,monitored_object_and_system:values.monitoredObjectAndSystem,sample_scope:values.sampleScope,normal_operation_patterns:values.normalOperationPatterns,event_parameter_relationships:values.eventParameterRelationships,business_constraints:values.businessConstraints,other_notes:values.otherNotes||''},sampling_dimensions:values.eventDimensions||[],event_definitions:values.eventDefinitions||[],compatibility_rules:COLDCHAIN_MODEL_CONFIGURATION.event_generation.compatibility_rules}}),[values]);
+  const [demoBound,setDemoBound]=useState(false);
+  const template=useMemo(()=>({fields:(values.fields||[]).filter(Boolean),event_generation:{scene_config:{business_scene_description:values.businessSceneDescription,monitored_object_and_system:values.monitoredObjectAndSystem,sample_scope:values.sampleScope,normal_operation_patterns:values.normalOperationPatterns,event_parameter_relationships:values.eventParameterRelationships,business_constraints:values.businessConstraints,other_notes:values.otherNotes||''},sampling_dimensions:(values.eventDimensions||[]).map(dim=>dim.dimension_id==='event_type'?{...dim,option_ids:Object.fromEntries((values.eventDefinitions||[]).map(event=>[event.name,event.event_id]))}:dim),event_definitions:values.eventDefinitions||[],compatibility_rules:(values.eventDimensions||[]).some(dim=>dim.dimension_id==='primary_event_stage')?COLDCHAIN_MODEL_CONFIGURATION.event_generation.compatibility_rules:{}}}),[values]);
   const assignment=useMemo(()=>demoBound?{selected_values:[{dimension_id:'event_type',dimension_name:'事件类型',option_id:'door_open',option_name:'开门'},{dimension_id:'primary_event_stage',dimension_name:'主要事件发生阶段',option_id:'port',option_name:'港口等待'},{dimension_id:'cargo_type',dimension_name:'货物类型',option_id:'chilled_goods',option_name:'冷藏货物'},{dimension_id:'environment',dimension_name:'环境条件',option_id:'mild_warm',option_name:'常规温暖环境'}],not_applicable_dimensions:[]}:samplePreviewAssignment(template,seed),[template,seed,demoBound]);
   let stage1=null;let stage2=null;let compileError='';
   try{stage1=compileStage1(template,assignment,PREVIEW_RUNTIME);if(demoBound)stage2=compileStage2(template,PREVIEW_RUNTIME,{assignment,event:DEMO_FROZEN_EVENT});}catch(error){compileError=error.message;}
@@ -450,12 +368,12 @@ function SynthesisPromptPreview({ form }) {
   ];
   return <>
     <Alert type="info" showIcon message="模型生成 · 两阶段联合生成" description="预览、切换页签和换采样条件均只运行本地编译器，不调用模型。字段规则按字段配置，第二阶段一次联合生成全部启用字段。"/>
-    <Flex justify="space-between" align="center" className="section-title"><Space><Tag color="blue">配置快照已编译</Tag><Tag>演示运行参数：12小时 · 15分钟/点 · 48点</Tag><Tag>估算：{Math.ceil(((stage1?.userText.length||0)+(stage1?.system.length||0))/3)} Tokens（字符估算）</Tag></Space><Button onClick={()=>{setSeed(current=>current+1);setDemoBound(false);}}>换一组采样条件</Button></Flex>
+    <Flex justify="space-between" align="center" className="section-title"><Button onClick={()=>{setSeed(current=>current+1);setDemoBound(false);}}>换一组采样条件</Button></Flex>
     {compileError&&<Alert className="section-title" type="error" showIcon message="编译校验未通过" description={compileError}/>} 
     <Tabs className="section-title" items={[
       {key:'assignment',label:'已分配采样条件',children:<><Flex justify="flex-end"><Button icon={<CopyOutlined/>} onClick={()=>copy(JSON.stringify(assignment,null,2))}>复制采样条件</Button></Flex><pre className="conversation-prompt-preview section-title">{JSON.stringify(assignment,null,2)}</pre></>},
       {key:'stage1',label:'阶段一：事件生成 Prompt',children:stage1?<><Flex justify="flex-end"><Button icon={<CopyOutlined/>} onClick={()=>copy(JSON.stringify({messages:stage1.messages},null,2))}>复制请求</Button></Flex><Tabs items={requestViews(stage1)}/></>:<Empty description="请先修复编译问题"/>},
-      generationMethod==='model'?{key:'stage2',label:'阶段二：时序数据生成 Prompt',children:<><Alert type={demoBound?'warning':'info'} showIcon message={demoBound?'当前绑定内置演示事件':'frozen_event 待阶段一生成并校验'} description={demoBound?'此事件仅用于页面联调，不是当前模型实际生成结果。':'System Prompt与请求骨架可预览；未绑定冻结事件前不是可发送请求。'}/><Flex justify="space-between" align="center" className="section-title"><Space><Tag>预计输出 48 点</Tag><Tag>{(values.fields||[]).filter(field=>field?.enabled!==false).length} 个字段</Tag></Space><Button icon={<CopyOutlined/>} disabled={!stage2} onClick={()=>stage2&&copy(JSON.stringify({messages:stage2.messages},null,2))}>复制可执行请求</Button></Flex><Tabs items={requestViews(stage2||skeleton)}/></>}:null,
+      generationMethod==='model'?{key:'stage2',label:'阶段二：时序数据生成 Prompt',children:<><Alert type={demoBound?'warning':'info'} showIcon message={demoBound?'当前绑定内置演示事件':'frozen_event 待阶段一生成并校验'} description={demoBound?'此事件仅用于页面联调，不是当前模型实际生成结果。':'System Prompt与请求骨架可预览；未绑定冻结事件前不是可发送请求。'}/><Flex justify="space-between" align="center" className="section-title"><Button icon={<CopyOutlined/>} disabled={!stage2} onClick={()=>stage2&&copy(JSON.stringify({messages:stage2.messages},null,2))}>复制可执行请求</Button></Flex><Tabs items={requestViews(stage2||skeleton)}/></>}:null,
     ].filter(Boolean)}/>
   </>;
 }
@@ -509,7 +427,8 @@ function buildConfiguration(values) {
     result_protocol:{applicability:['applicable','not_applicable','undetermined'],decision:['pass','fail','review','execution_failed'],evidence_required:true},
   }));
   return {
-    name:values.name,description:values.description,scope:'custom',business_type:values.businessType||'传感器时序',
+    quality_catalog:qualityConfig('时序数据',values.qualityCatalog),
+    privacy_policy:values.privacyPolicy||[],name:values.name,description:values.description,scope:'custom',business_type:values.businessType||'冷藏集装箱物流',
     event_generation:{prompt_version:'timeseries-two-stage/v1',scene_config:{business_scene_description:values.businessSceneDescription,monitored_object_and_system:values.monitoredObjectAndSystem,sample_scope:values.sampleScope,normal_operation_patterns:values.normalOperationPatterns,event_parameter_relationships:values.eventParameterRelationships,business_constraints:values.businessConstraints,other_notes:values.otherNotes||''},scenario_prompt:[values.businessSceneDescription,values.monitoredObjectAndSystem,values.sampleScope,values.normalOperationPatterns,values.eventParameterRelationships,values.businessConstraints,values.otherNotes].filter(Boolean).join('\n\n'),sampling_dimensions:(values.eventDimensions||[]).map((item,index)=>({...item,dimension_id:item.dimension_id||stableConfigId('dim'),option_ids:Object.fromEntries((item.values||[]).map((value,optionIndex)=>[value,item.option_ids?.[value]||`opt_${index}_${optionIndex}_${Date.now().toString(36)}`]))})),allowed_events:allowedEvents,event_definitions:selectedEvents,event_candidates:selectedEvents,compatibility_rules:COLDCHAIN_MODEL_CONFIGURATION.event_generation.compatibility_rules,event_strategy:'candidate_selection',llm_numeric_truth_impact:false},
     coverage:coverageLabels.length?{
       schema_version:'coldchain-coverage/v1',strategy:'template_profile_pass_only',labeling_prompt:values.coverageLabelingPrompt,
@@ -568,11 +487,12 @@ function configurationToForm(config) {
   const byDefinitionName=new Map(storedDefinitions.map(item=>[item.name,item]));
   const byDefinitionId=new Map(storedDefinitions.map(item=>[item.event_id,item]));
   const eventDefinitions=eventDimensions[0].values.map((name,index)=>{const stored=byDefinitionName.get(name)||byDefinitionId.get(EVENT_NAME_TO_ID[name]);const defaults=DEFAULT_EVENT_ADVANCED[name]||['','',''];return {event_id:stored?.event_id||EVENT_NAME_TO_ID[name]||eventDimensions[0].option_ids?.[name]||`event_${index}`,name,description_definition:stored?.description_definition||stored?.prompt||DEFAULT_EVENT_DEFINITION_TEXT[name]||'',impact_targets:stored?.impact_targets||defaults[0],duration_range:stored?.duration_range||defaults[1],intensity_parameters:stored?.intensity_parameters||'',occurrence_conditions:stored?.occurrence_conditions||defaults[2],parameter_names:stored?.parameter_names||[]};});
+  eventDimensions[0].option_ids=Object.fromEntries(eventDefinitions.map(item=>[item.name,item.event_id]));
   const generation=config.generation||{};const generationMethod=generation.method||'engine';
   const engineFieldMappings=generation.field_mappings||fields.map(item=>({source_field_id:item.field_id,source_field_name:item.label,engine_field:item.generation_rules?.[0]?.engine_field||item.field_id}));
   const engineEventMappings=generation.event_mappings||eventDefinitions.map(item=>({source_event:item.name,engine_event:item.event_id}));
-  return {
-    name:config.name,businessType:config.business_type||'传感器时序',description:config.description,
+  return {qualityCatalog:qualityConfig('时序数据',config.quality_catalog),privacyPolicy:config.privacy_policy||[],
+    name:config.name,businessType:config.business_type||'冷藏集装箱物流',description:config.description,
     businessSceneDescription:scene.business_scene_description||legacyPrompt||'冷藏货物经历公路运输、港口等待和海运，期间持续进行环境与设备监测',
     monitoredObjectAndSystem:scene.monitored_object_and_system||'一台装载货物的冷藏集装箱，包含制冷设备、箱内空气、货物及温湿度传感器',
     sampleScope:scene.sample_scope||'一条样本对应一个集装箱的一次运输过程，包含多个连续监测时刻',
@@ -647,10 +567,11 @@ export function ColdChainTemplateEditor({ draftId, template, onClose, onPublishe
   useEffect(()=>{let active=true;setLoading(true);const request=draftId?coldchainApi.getTemplateDraft(draftId):template?Promise.resolve(template):coldchainApi.createTemplateDraft({});request.then(value=>{if(!active)return;setDraft(value);setValidation(value.validation||null);setTrial(value.trial_run||null);form.setFieldsValue(configurationToForm(value.configuration||value));setDirty(false);}).catch(error=>message.error(error.message)).finally(()=>{if(active)setLoading(false);});return()=>{active=false;};},[draftId,template,form]);
   const save=async({quiet=false}={})=>{setAction('save');try{await form.validateFields();const config=buildConfiguration(form.getFieldsValue(true));const response=await coldchainApi.saveTemplateDraft(draft.draft_id,config,draft.revision);setDraft(response);setValidation(response.validation||null);setTrial(response.trial_run||null);setDirty(false);if(!quiet)message.success('草稿已保存');return response;}finally{setAction('');}};
   const ensureSaved=async()=>!draft||dirty?save({quiet:true}):draft;
-  const next=async()=>{if(readOnly){setStep(value=>Math.min(STEP_ITEMS.length-1,value+1));return;}try{if(step===0)await form.validateFields(['name','businessType','description','businessSceneDescription','monitoredObjectAndSystem','sampleScope','normalOperationPatterns','eventParameterRelationships','businessConstraints','otherNotes']);else await form.validateFields();await save({quiet:true});setStep(value=>Math.min(STEP_ITEMS.length-1,value+1));}catch(error){if(error?.errorFields)message.warning('请检查当前步骤配置');else message.error(error.message);}};
-  const runTrial=async()=>{setAction('trial');try{const fields=['trialModel','trialQualityModel','trialSampleCount','trialStepCount','trialIntervalMinutes'];if(form.getFieldValue('trialGenerationParamsEnabled'))fields.push('trialGenerationParamsJson');if(form.getFieldValue('trialQualityParamsEnabled'))fields.push('trialQualityParamsJson');await form.validateFields(fields);const saved=await ensureSaved();const checked=await coldchainApi.validateTemplateDraft(saved.draft_id,saved.revision);setValidation(checked);if(!checked.valid){message.error((checked.errors||[]).join('；'));return;}const values=form.getFieldsValue(true);const generationParameters=values.trialGenerationParamsEnabled?JSON.parse(values.trialGenerationParamsJson):null;const qualityParameters=values.trialQualityParamsEnabled?JSON.parse(values.trialQualityParamsJson):null;const result=await coldchainApi.trialTemplateDraft(saved.draft_id,{expected_revision:saved.revision,model_alias:values.trialModel||'qwen3-14b',quality_model_alias:values.trialQualityModel||'qwen3-14b',sample_count:Number(values.trialSampleCount||2),step_count:Number(values.trialStepCount||100),interval_minutes:Number(values.trialIntervalMinutes||10),...(generationParameters?{generation_parameters:generationParameters}:{}),...(qualityParameters?{quality_parameters:qualityParameters}:{})});setTrial(result);message[result.status==='PASS'?'success':'error'](`试运行质检：${result.status}`);}catch(error){if(error?.errorFields)message.warning('请检查试运行配置');else message.error(error.message);}finally{setAction('');}};
-  const publish=async()=>{setAction('publish');try{const response=await coldchainApi.publishTemplateDraft(draft.draft_id,draft.revision);message.success(`${response.published_template.template_id} / ${response.published_template.version} 已发布`);onPublished?.(response.published_template);}catch(error){message.error(error.message);}finally{setAction('');}};
-  const currentTrial=trial&&draft&&trial.revision===draft.revision;
+  const next=async()=>{if(readOnly){setStep(value=>Math.min(STEP_ITEMS.length-1,value+1));return;}try{if(step===0)await form.validateFields(['name','businessType','description','businessSceneDescription','monitoredObjectAndSystem','sampleScope','normalOperationPatterns','eventParameterRelationships','businessConstraints','otherNotes']);else await form.validateFields();await ensureSaved();setStep(value=>Math.min(STEP_ITEMS.length-1,value+1));}catch(error){if(error?.errorFields)message.warning('请检查当前步骤配置');else message.error(error.message);}};
+  const runTrial=async()=>{setAction('trial');try{const fields=['trialModel','trialQualityModel','trialSampleCount','trialStepCount','trialIntervalMinutes'];if(form.getFieldValue('trialGenerationParamsEnabled'))fields.push('trialGenerationParamsJson');if(form.getFieldValue('trialQualityParamsEnabled'))fields.push('trialQualityParamsJson');await form.validateFields(fields);const saved=await ensureSaved();const checked=await coldchainApi.validateTemplateDraft(saved.draft_id,saved.revision);setValidation(checked);if(!checked.valid){message.error((checked.errors||[]).join('；'));return;}const values=form.getFieldsValue(true);const generationParameters=values.trialGenerationParamsEnabled?JSON.parse(values.trialGenerationParamsJson):null;const qualityParameters=values.trialQualityParamsEnabled?JSON.parse(values.trialQualityParamsJson):null;const result=await coldchainApi.trialTemplateDraft(saved.draft_id,{expected_revision:saved.revision,model_alias:values.trialModel||'qwen3-14b',quality_model_alias:values.trialQualityModel||'qwen3-14b',sample_count:Number(values.trialSampleCount||2),step_count:Number(values.trialStepCount||100),interval_minutes:Number(values.trialIntervalMinutes||10),...(generationParameters?{generation_parameters:generationParameters}:{}),...(qualityParameters?{quality_parameters:qualityParameters}:{})});setTrial(result);message.success('试运行执行结束，请查看逐规则报告');}catch(error){if(error?.errorFields)message.warning('请检查试运行配置');else message.error(error.message);}finally{setAction('');}};
+  const publish=async()=>{setAction('publish');try{const response=await coldchainApi.publishTemplateDraft(draft.draft_id,draft.revision);message.success(`${response.published_template.template_id} 已发布`);onPublished?.(response.published_template);}catch(error){message.error(error.message);}finally{setAction('');}};
+  const privacyPassed=templatePrivacyCheck(trial?.rule_report).passed;
+  const currentTrial=!dirty&&trial&&draft&&trial.revision===draft.revision&&trial.rule_report?.protocolVersion===2&&privacyPassed;
   const labelsEnabled=Form.useWatch('labelsEnabled',{form,preserve:true});
   const trialGenerationParamsEnabled=Form.useWatch('trialGenerationParamsEnabled',{form,preserve:true});
   const trialQualityParamsEnabled=Form.useWatch('trialQualityParamsEnabled',{form,preserve:true});
@@ -661,17 +582,17 @@ export function ColdChainTemplateEditor({ draftId, template, onClose, onPublishe
   const fields=(Array.isArray(form.getFieldValue('fields'))?form.getFieldValue('fields'):[]).filter(Boolean);
   const semanticRuleCount=generationMethod==='model'?watchedQualityRules.filter(rule=>rule.enabled!==false&&rule.mode!=='function').length:0;
   const generationCallEstimate=Number(watchedTrialSampleCount);const qualityCallEstimate=Number(watchedTrialSampleCount)*semanticRuleCount;
-  return <div className="template-create-page coldchain-template-create-page">
+  return <div className="template-create-page coldchain-template-create-page" data-ued-readonly={readOnly || undefined}>
     <Flex className="page-header" justify="space-between" align="flex-start"><Space align="start"><Button type="text" icon={<LeftOutlined/>} aria-label="返回模板中心" onClick={onClose}/><div><Title level={2}>时序类数据模板</Title><Paragraph type="secondary">依次完成场景定义、生成配置、两阶段指令预览、质检规则和试运行。</Paragraph></div></Space></Flex>
     <Flex justify="space-between" align="center" wrap="wrap" gap={12} className="conversation-template-statusbar template-editor-step-actions-top">
-      <Space><Tag color="blue">草稿已保存</Tag>{dirty&&<Tag color="orange">未保存</Tag>}{validation?.valid&&<Tag color="cyan">静态校验通过</Tag>}{currentTrial&&<Tag color={trial.status==='PASS'?'green':'red'}>试运行 {trial.status}</Tag>}<Text type="secondary">草稿 ID：{draft.draft_id}</Text></Space>
-      <Space><Button icon={<ArrowLeftOutlined/>} disabled={step===0} onClick={()=>setStep(value=>Math.max(0,value-1))}>上一步</Button>{!readOnly&&<Button icon={<SaveOutlined/>} loading={action==='save'} disabled={!dirty} onClick={()=>save()}>保存模板草稿</Button>}{step<STEP_ITEMS.length-1&&<Button type="primary" icon={<ArrowRightOutlined/>} loading={action==='save'} onClick={next}>下一步</Button>}{!readOnly&&step===STEP_ITEMS.length-1&&<Button type="primary" icon={<CheckCircleOutlined/>} disabled={!currentTrial||trial.status!=='PASS'} loading={action==='publish'} onClick={publish}>发布模板</Button>}</Space>
+      <Text type="secondary">ID：{draft.draft_id||template?.template_id}{template&&!template.draft_id&&template.version?` · 版本 ${template.version}`:''}</Text>
+      <Space>{!readOnly&&<Button onClick={onClose}>取消</Button>}<Button icon={<ArrowLeftOutlined/>} disabled={step===0} onClick={()=>setStep(value=>Math.max(0,value-1))}>上一步</Button>{!readOnly&&<Button icon={<SaveOutlined/>} loading={action==='save'} disabled={!dirty} onClick={()=>save()}>保存模板草稿</Button>}{step<STEP_ITEMS.length-1&&<Button type="primary" icon={<ArrowRightOutlined/>} loading={action==='save'} onClick={next}>下一步</Button>}{!readOnly&&step===STEP_ITEMS.length-1&&<Tooltip title={!privacyPassed&&trial?.rule_report?'模板隐私检查不通过，请修改后重新试运行':''}><span><Button type="primary" icon={<CheckCircleOutlined/>} disabled={!currentTrial||!validation?.valid} loading={action==='publish'} onClick={publish}>发布模板</Button></span></Tooltip>}</Space>
     </Flex>
     <Steps current={step} items={STEP_ITEMS} onChange={target=>readOnly?setStep(target):target<step?setStep(target):null} className="template-editor-steps"/>
-    <Form disabled={readOnly} form={form} layout="vertical" onValuesChange={changed=>{if(Object.keys(changed).every(key=>['trialModel','trialSampleCount'].includes(key)))return;setDirty(true);setValidation(null);setTrial(null);}}>
+    <Form disabled={readOnly} form={form} layout="vertical" onValuesChange={changed=>{if(Object.keys(changed).every(key=>['trialModel','trialSampleCount'].includes(key)))return;setDirty(true);setValidation(null);}}>
       {step===0&&<>
         <Card className="main-card" title="模板基本信息">
-        <Row gutter={16}><Col span={12}><Form.Item name="name" label="模板名称" rules={[{required:true},{max:80}]}><Input/></Form.Item></Col><Col span={12}><Form.Item name="businessType" label="业务类型" rules={[{required:true},{max:80}]}><Input placeholder="例如：传感器时序"/></Form.Item></Col></Row>
+        <Row gutter={16}><Col span={12}><Form.Item name="name" label="模板名称" rules={[{required:true},{max:80}]}><Input placeholder="请输入模板名称"/></Form.Item></Col><Col span={12}><Form.Item name="businessType" label="业务类型" rules={[{required:true,message:'请选择业务类型'}]}><BusinessTypeSelect modality="time_series"/></Form.Item></Col></Row>
         <Form.Item name="description" label="模板描述" rules={[{max:500}]}><Input.TextArea rows={3} maxLength={500} showCount placeholder="简要说明模板覆盖的时序业务和用途"/></Form.Item>
         </Card>
         <Card className="main-card conversation-step-card section-title" title="事件场景配置">
@@ -689,39 +610,32 @@ export function ColdChainTemplateEditor({ draftId, template, onClose, onPublishe
       <GenerationMethodSelector form={form}/>
       {generationMethod==='model'?<>
       <Card className="main-card conversation-step-card section-title" title="事件生成配置">
-        <Card size="small" className="conversation-config-card" title="事件采样维度"><EventSamplingDimensionsEditor form={form}/></Card>
+        <Card size="small" className="conversation-config-card"><EventSamplingDimensionsEditor form={form}/></Card>
         <Card size="small" className="conversation-config-card section-title" title="事件定义">
           <EventDefinitionsEditor form={form}/>
         </Card>
       </Card>
       <Card className="main-card conversation-step-card section-title" title="输出字段">
         <Alert type="success" showIcon message="配置输出字段及其生成方式" description="参数质检规则统一放在后续“质检规则配置”步骤。"/>
-        <Form.List name="fields">{(fieldItems,{add,remove})=><><Collapse className="section-title" defaultActiveKey={['return_air_temperature']} items={fieldItems.map(item=>{const field=form.getFieldValue(['fields',item.name])||{};return {key:field.field_id||String(item.key),label:<Flex justify="space-between" align="center"><Space><Text strong>{field.label||field.field_id||'输出字段'}</Text><Tag color="blue">可编辑</Tag></Space><Button type="text" danger icon={<DeleteOutlined/>} onClick={event=>{event.stopPropagation();remove(item.name);}}>删除字段</Button></Flex>,children:<FieldRuleEditor fieldIndex={item.name}/>};})}/><Button type="dashed" block icon={<PlusOutlined/>} onClick={()=>add({field_id:`custom_parameter_${Date.now()}`,label:'',type:'number',unit:'',enum_values:[],enabled:true,custom:true,overall_change_rules:'',stage_event_rules:'',relations_special_constraints:'',quality_mode:'function',quality_python:'def validate(value, context):\n    return value is not None',quality_prompt:''})}>添加输出字段</Button></>}</Form.List>
+        <Form.List name="fields">{(fieldItems,{add,remove})=><><div className="template-section-heading"><strong>输出字段</strong><Button type="primary" icon={<PlusOutlined/>} onClick={()=>add({field_id:`custom_parameter_${Date.now()}`,label:'',type:'number',unit:'',enum_values:[],enabled:true,custom:true,overall_change_rules:'',stage_event_rules:'',relations_special_constraints:'',quality_mode:'function',quality_python:'def validate(value, context):\n    return value is not None',quality_prompt:''})}>添加输出字段</Button></div><Collapse className="section-title" defaultActiveKey={['return_air_temperature']} items={fieldItems.map(item=>{const field=form.getFieldValue(['fields',item.name])||{};return {key:field.field_id||String(item.key),label:<Flex justify="space-between" align="center"><Space><Text strong>{field.label||field.field_id||'输出字段'}</Text><Tag color="blue">可编辑</Tag></Space><Button type="text" danger icon={<DeleteOutlined/>} onClick={event=>{event.stopPropagation();remove(item.name);}}>删除字段</Button></Flex>,children:<FieldRuleEditor fieldIndex={item.name}/>};})}/></>}</Form.List>
       </Card></>:<EngineGenerationEditor form={form}/>}</>}
       {step===2&&<Card className="main-card conversation-step-card" title={STEP_ITEMS[2].title}><SynthesisPromptPreview form={form}/></Card>}
       {step===3&&<Card className="main-card conversation-step-card" title={STEP_ITEMS[3].title}>
         <Alert type="info" showIcon message="配置本模板实际执行的质检范围" description="本页只制定规则，不展示模拟通过结果；执行状态、证据和错误请在试运行或任务报告中查看。"/>
-        <div className="section-title"><QualityConfiguration form={form} fields={fields} generationMethod={generationMethod} labelsEnabled={labelsEnabled}/></div>
+        <div className="section-title"><QualityConfiguration readOnly={readOnly} form={form} fields={fields} generationMethod={generationMethod} labelsEnabled={labelsEnabled}/></div>
       </Card>}
       {step===4&&<Card className="main-card conversation-step-card" title={STEP_ITEMS[4].title}>
         <Divider orientation="left">生成配置</Divider>
-        <Row gutter={16} className="section-title"><Col span={9}><Form.Item name="trialModel" label="生成模型" rules={[{required:true}]}><Select options={[{value:'qwen3-14b',label:'Qwen3-14B（非思考模式）'}]}/></Form.Item></Col><Col span={5}><Form.Item name="trialSampleCount" label="试运行样本数量" rules={[{required:true}]}><InputNumber min={1} max={5} addonAfter="票" style={{width:'100%'}}/></Form.Item></Col><Col span={5}><Form.Item name="trialStepCount" label="时序数据步数" rules={[{required:true}]}><InputNumber min={2} max={10000} addonAfter="步" style={{width:'100%'}}/></Form.Item></Col><Col span={5}><Form.Item name="trialIntervalMinutes" label="时间戳间隔" rules={[{required:true}]}><InputNumber min={1} max={1440} addonAfter="分钟" style={{width:'100%'}}/></Form.Item></Col></Row>
-        <Card size="small" className="conversation-config-card" title="生成模型参数（可选）" extra={<Form.Item name="trialGenerationParamsEnabled" valuePropName="checked" noStyle><Switch checkedChildren="启用" unCheckedChildren="关闭"/></Form.Item>}>
-          {!trialGenerationParamsEnabled?<Alert type="info" showIcon message="使用模型默认生成参数" description="关闭后，试运行请求不会传递任何生成参数。"/>:<Form.Item name="trialGenerationParamsJson" extra="使用 JSON 配置温度、Top P 等模型参数。" rules={[{validator:(_,value)=>{try{const parsed=JSON.parse(String(value||''));return parsed&&typeof parsed==='object'&&!Array.isArray(parsed)?Promise.resolve():Promise.reject(new Error('请输入 JSON 对象'));}catch{return Promise.reject(new Error('JSON 格式不正确'));}}}]}><Input.TextArea className="coldchain-json-textarea" rows={7} spellCheck={false} placeholder={'{\n  "temperature": 0.7,\n  "top_p": 0.9\n}'}/></Form.Item>}
-        </Card>
+        <Row gutter={16} className="section-title"><Col span={8}><Form.Item name="trialSampleCount" label="试运行样本数量" rules={[{required:true}]}><InputNumber placeholder="请输入试运行样本数量（1～5）" min={1} max={5} addonAfter="票" style={{width:'100%'}}/></Form.Item></Col><Col span={8}><Form.Item name="trialStepCount" label="时序数据步数" rules={[{required:true}]}><InputNumber placeholder="请输入时序数据步数（2～10000）" min={2} max={10000} addonAfter="步" style={{width:'100%'}}/></Form.Item></Col><Col span={8}><Form.Item name="trialIntervalMinutes" label="时间戳间隔" rules={[{required:true}]}><InputNumber placeholder="请输入时间戳间隔（1～1440）" min={1} max={1440} addonAfter="分钟" style={{width:'100%'}}/></Form.Item></Col></Row>
+        <FormModelConfig form={form} modelName="trialModel" parameterSwitchName="trialGenerationParamsEnabled" parameterName="trialGenerationParamsJson" label="生成模型" options={[{value:'qwen3-14b',label:'Qwen3-14B（非思考模式）'}]}/>
         <Divider orientation="left">质检配置</Divider>
-        <Form.Item name="trialQualityModel" label="质检模型" rules={[{required:true}]}><Select options={[{value:'qwen3-14b',label:'Qwen3-14B（非思考模式）'}]}/></Form.Item>
-        <Card size="small" className="conversation-config-card" title="质检模型参数（可选）" extra={<Form.Item name="trialQualityParamsEnabled" valuePropName="checked" noStyle><Switch checkedChildren="启用" unCheckedChildren="关闭"/></Form.Item>}>
-          {!trialQualityParamsEnabled?<Alert type="info" showIcon message="使用质检模型默认参数" description="关闭后，质检请求不会传递任何模型参数。"/>:<Form.Item name="trialQualityParamsJson" extra="使用 JSON 配置质检模型参数。" rules={[{validator:(_,value)=>{try{const parsed=JSON.parse(String(value||''));return parsed&&typeof parsed==='object'&&!Array.isArray(parsed)?Promise.resolve():Promise.reject(new Error('请输入 JSON 对象'));}catch{return Promise.reject(new Error('JSON 格式不正确'));}}}]}><Input.TextArea className="coldchain-json-textarea" rows={7} spellCheck={false} placeholder={'{\n  "temperature": 0.1\n}'}/></Form.Item>}
-        </Card>
+        <FormModelConfig form={form} modelName="trialQualityModel" parameterSwitchName="trialQualityParamsEnabled" parameterName="trialQualityParamsJson" label="质检模型" options={[{value:'qwen3-14b',label:'Qwen3-14B（非思考模式）'}]}/>
         <Descriptions className="section-title" bordered size="small" column={3} items={[{key:'generation',label:'生成模型调用预估',children:`${generationCallEstimate} 次`},{key:'quality',label:'质检模型调用预估',children:`${qualityCallEstimate} 次`},{key:'total',label:'API 总调用次数预估',children:<Text strong>{generationCallEstimate+qualityCallEstimate} 次</Text>}]}/>
-        {!readOnly&&<Flex justify="flex-end"><Button type="primary" icon={<SafetyCertificateOutlined/>} loading={action==='trial'} onClick={runTrial}>开始试运行并质检</Button></Flex>}
-        <Divider/>{!currentTrial?<Empty description={trial?'模板已修改，原试运行结果失效':'尚未试运行'}/>:<Card size="small" title={`试运行结果：${trial.status}`} extra={<Tag color={trial.status==='PASS'?'green':'red'}>{trial.status}</Tag>}><Descriptions bordered size="small" column={3} items={[
+        {!readOnly&&<Flex justify="flex-end" className="trial-actions"><Button type="primary" icon={<SafetyCertificateOutlined/>} loading={action==='trial'} onClick={runTrial}>开始试运行并质检</Button></Flex>}
+        <Divider/>{trial&&!currentTrial&&<Text type="secondary">以下为上次试运行结果；当前配置需重新试运行后才能发布。</Text>}{!trial?.output_series?<Empty description="尚未试运行"/>:<Card size="small" title="试运行执行结果"><Descriptions bordered size="small" column={3} items={[
           {key:'model',label:'生成模型',children:trial.model_alias},{key:'quality-model',label:'质检模型',children:trial.quality_model_alias},{key:'count',label:'样本数量',children:`${trial.sample_count} 票`},
           {key:'steps',label:'时序规格',children:`${trial.step_count} 步 / ${trial.interval_minutes} 分钟间隔`},
-          {key:'qwen',label:'Qwen',children:`${trial.qwen?.status} / ${trial.qwen?.call_count||0} 次`},{key:'score',label:'平均质量分',children:trial.quality?.average_score??'-'},
-          {key:'local',label:'本地规则',children:trial.quality?.local_rule_pass?<Tag color="green">通过</Tag>:<Tag color="red">未通过</Tag>},
-          {key:'status',label:'样本结论',children:Object.entries(trial.quality?.status_counts||{}).map(([key,value])=><Tag key={key} color={key==='PASS'?'green':key==='REVIEW'?'orange':'red'}>{key} {value}</Tag>)},
+          {key:'qwen',label:'Qwen',children:`${trial.qwen?.status} / ${trial.qwen?.call_count||0} 次`},
         ]}/>
           <Card className="section-title" size="small" title="1. 事件内容生成请求">
             <Tabs items={[
@@ -732,21 +646,12 @@ export function ColdChainTemplateEditor({ draftId, template, onClose, onPublishe
           <Card className="section-title" size="small" title="2. 事件内容合成" extra={<Text copyable={{text:JSON.stringify(trial.generated_event||{},null,2)}}>复制 JSON</Text>}>
             <Input.TextArea className="coldchain-json-textarea" value={JSON.stringify(trial.generated_event||{},null,2)} readOnly autoSize={{minRows:14,maxRows:26}}/>
           </Card>
-          {trial.stage2_request&&<Card className="section-title" size="small" title="3. 阶段二完整请求" extra={<Text copyable={{text:JSON.stringify(trial.stage2_request,null,2)}}>复制 JSON</Text>}>
+          <Card className="section-title" size="small" title="3. 时序字段合成" extra={<Text copyable={{text:JSON.stringify(trial.output_series||[],null,2)}}>复制 JSON</Text>}><Input.TextArea className="coldchain-json-textarea" value={JSON.stringify(trial.output_series||[],null,2)} readOnly autoSize={{minRows:14,maxRows:26}}/></Card>
+          {trial.stage2_request&&<Card className="section-title" size="small" title="阶段二完整请求" extra={<Text copyable={{text:JSON.stringify(trial.stage2_request,null,2)}}>复制 JSON</Text>}>
             <Input.TextArea className="coldchain-json-textarea" value={JSON.stringify(trial.stage2_request,null,2)} readOnly autoSize={{minRows:14,maxRows:26}}/>
           </Card>}
-          <Divider orientation="left">输出参数时序曲线</Divider>
-          <TimeSeriesTrialChart rows={trial.output_series||[]} fields={trial.numeric_fields||[]}/>
-          <Flex justify="flex-end" className="section-title"><Button icon={<DownloadOutlined/>} disabled={!trial.output_series?.length} onClick={()=>downloadTrialCsv(trial.output_series,draft.name)}>下载完整数据（CSV）</Button></Flex>
-          <Divider orientation="left">GPS 轨迹</Divider>
-          <GpsTrialChart points={trial.gps_track||[]}/>
-          <Divider orientation="left">质检项目明细</Divider>
-          <Table rowKey="key" size="small" pagination={false} scroll={{x:1040}} dataSource={trial.quality_items||[]} columns={[
-            {title:'质检项目',dataIndex:'name',width:220},{title:'检查对象',dataIndex:'target',width:180},
-            {title:'判断方式',dataIndex:'evaluator',width:110,render:value=><Tag color={value==='semantic'?'blue':'green'}>{value==='semantic'?'语义判断':'规则判断'}</Tag>},
-            {title:'质检内容',dataIndex:'content',width:420},{title:'阈值',dataIndex:'threshold',width:80,render:(value,row)=>row.evaluator==='semantic'?Number(value).toFixed(2):'-'},
-            {title:'输出结果',dataIndex:'output',width:110,fixed:'right',render:(value,row)=>{const passed=row.evaluator==='semantic'?Number(value)>=Number(row.threshold):value===true;return <Tag color={passed?'green':'red'}>{row.evaluator==='semantic'?Number(value).toFixed(2):String(value===true)}</Tag>; }},
-          ]}/>
+
+          <Card className="section-title" size="small" title="质检报告" extra={<QualityReportDownloadButton report={trial.rule_report}/>}><RuleQualityReport templateTrial showDownload={false} showClassification report={trial.rule_report||{templateId:draft?.draft_id}}/></Card>
         </Card>}
       </Card>}
     </Form>
@@ -762,7 +667,7 @@ export function ColdChainTemplateCenter({ onCreate }) {
   const refresh=()=>{setLoading(true);Promise.all([coldchainApi.listTemplates(),coldchainApi.listTemplateDrafts()]).then(([templates,draftValues])=>{setItems(templates.items||[]);setDrafts((draftValues.items||[]).filter(item=>item.status!=='published'));}).catch(error=>message.error(error.message)).finally(()=>setLoading(false));};
   useEffect(()=>{refresh();},[]);
   const showDetail=(item,isDraft=false)=>Modal.info({title:item.name||'时序模板详情',width:680,okText:'关闭',content:<Descriptions bordered size="small" column={2} className="section-title" items={[
-    {key:'id',label:isDraft?'草稿 ID':'模板 ID',span:2,children:<Text copyable>{isDraft?item.draft_id:item.template_id}</Text>},
+    {key:'id',label:'ID',span:2,children:<Text copyable>{isDraft?item.draft_id:item.template_id}</Text>},
     ...(!isDraft?[{key:'version',label:'版本',children:item.version}]:[]),
     {key:'status',label:'状态',children:isDraft?(item.trial_status||'尚未试运行'):'已发布'},
     {key:'fields',label:'字段数量',children:item.field_count??item.parameter_count??'-'},
@@ -779,7 +684,7 @@ export function ColdChainTemplateCenter({ onCreate }) {
     {title:'试运行',dataIndex:'trial_status',render:value=><Tag color={value==='PASS'?'green':'default'}>{value||'历史版本'}</Tag>},{title:'状态',render:()=> <Badge status="success" text="已发布"/>},{title:'操作',width:300,render:(_,row)=><TemplateActionButtons onDetail={()=>showDetail(row)} onEdit={()=>{}} onPublish={()=>{}} onCopy={()=>copyAsDraft(row)} onDelete={()=>deleteTemplate(row)} canEdit={false} canPublish={false} canDelete={row.scope!=='official'} editReason="已发布版本不可直接编辑，请复制后修改" publishReason="该版本已经发布" deleteReason="官方模板不可删除"/>},
   ];
   const draftColumns=[
-    {title:'草稿',dataIndex:'name'},{title:'字段',dataIndex:'field_count',render:value=>`${value} 个`},{title:'标签组合',dataIndex:'coverage_profile_count',render:value=>`${value||0} 组`},{title:'试运行',dataIndex:'trial_status',render:value=>value?<Tag color={value==='PASS'?'green':'red'}>{value}</Tag>:<Tag>未运行</Tag>},{title:'更新时间',dataIndex:'updated_at',render:formatDateTime},{title:'操作',width:300,render:(_,row)=><TemplateActionButtons onDetail={()=>showDetail(row,true)} onEdit={()=>setEditingDraft(row.draft_id)} onPublish={()=>publishDraft(row)} onCopy={()=>copyAsDraft(row)} onDelete={()=>deleteTemplate(row,true)} canEdit={!row._prototypeCopy} canPublish={row.trial_status==='PASS'} editReason="内置示例草稿仅用于查看" publishReason="试运行通过后才能发布"/>},
+    {title:'草稿',dataIndex:'name'},{title:'字段',dataIndex:'field_count',render:value=>`${value} 个`},{title:'标签组合',dataIndex:'coverage_profile_count',render:value=>`${value||0} 组`},{title:'试运行',dataIndex:'trial_status',render:value=>value?<Tag color={value==='PASS'?'green':'red'}>{value}</Tag>:<Tag>未运行</Tag>},{title:'更新时间',dataIndex:'updated_at',render:formatDateTime},{title:'操作',width:300,render:(_,row)=><TemplateActionButtons onDetail={()=>showDetail(row,true)} onEdit={()=>setEditingDraft(row.draft_id)} onPublish={()=>publishDraft(row)} onCopy={()=>copyAsDraft(row)} onDelete={()=>deleteTemplate(row,true)} canEdit={!row._prototypeCopy} canPublish={row.trial_status==='PASS'&&templatePrivacyCheck(row.trial_run?.rule_report).passed} editReason="内置示例草稿仅用于查看" publishReason="请先完成试运行并通过模板隐私检查"/>},
   ];
   return <div>
     <Flex justify="space-between" align="center" className="section-title"><Alert style={{flex:1,marginRight:16}} type="success" showIcon message="五步制作时序模板" description="事件与标签 → 输出参数 → 合成指令预览 → 统一质检规则 → 试运行与发布。"/><Space><Button icon={<ReloadOutlined/>} loading={loading} onClick={refresh}>刷新</Button><Button type="primary" icon={<PlusOutlined/>} onClick={onCreate}>新建时序模板</Button></Space></Flex>

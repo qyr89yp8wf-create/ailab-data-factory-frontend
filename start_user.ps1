@@ -1,11 +1,8 @@
 $ErrorActionPreference = 'Stop'
 $portalRoot = Split-Path -Parent $MyInvocation.MyCommand.Path
-Set-Location -LiteralPath $portalRoot
-
-if (-not (Test-Path -LiteralPath (Join-Path $portalRoot 'node_modules'))) {
-  Write-Host 'Installing user portal dependencies...'
-  npm.cmd install
+if (-not (Get-Command node.exe -ErrorAction SilentlyContinue)) {
+  Write-Host 'Node.js was not found. Install Node.js and try again.'
+  exit 1
 }
-
-Write-Host 'User portal: http://127.0.0.1:8768/'
-npm.cmd run dev
+& node.exe (Join-Path $portalRoot 'start_user.mjs')
+exit $LASTEXITCODE

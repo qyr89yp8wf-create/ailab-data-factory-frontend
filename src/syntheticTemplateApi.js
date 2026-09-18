@@ -1,6 +1,8 @@
 import { FALLBACK_CATALOG, defaultFields } from './synthetic-template/catalog';
 import { id, jsonDataUrl, mockResult, now, readStore, textDataUrl, updateStore } from './mockStore';
 
+import {templateRulesSnapshot} from './templateQualitySnapshot.js';
+import {trialQualityReport,templateLabelSnapshot} from './qualityResults.js';
 const DRAFT_STORE = 'fictional-template-jobs';
 const TEMPLATE_STORE = 'fictional-templates';
 const GENERATION_STORE = 'fictional-generation-jobs';
@@ -15,7 +17,7 @@ function normalizeDraft(payload, current = null) {
   return {
     id: current?.id || id('FICTIONAL-TPL'), job_id: current?.id || undefined, schema_version: 'fictional-template-job/v1', status: current?.status || 'draft', revision,
     created_at: current?.created_at || now(), updated_at: now(), template: { ...payload, fields: payload.fields?.length ? payload.fields : defaultFields(payload.document_type, payload.content_subtype) },
-    validation: null, last_trial: null, published_template_id: current?.published_template_id || null, published_version: current?.published_version || null,
+    validation: null, last_trial: current?.last_trial || null, published_template_id: current?.published_template_id || null, published_version: current?.published_version || null,
   };
 }
 
@@ -23,6 +25,7 @@ function trialFor(item) {
   const fields = item.template?.fields || [];
   return {
     job_id: item.id, revision: item.revision, status: 'PASS',
+    rule_report:trialQualityReport(templateRulesSnapshot('文档图像',item.template),{labels:templateLabelSnapshot(item.template,'文档图像'),templateId:item.id,templateVersion:String(item.revision)}),
     quality: { status: 'PASS', field_count: fields.length, check_count: fields.length + 8, summary: { checks: fields.length + 8, passed: fields.length + 8, review: 0, rejected: 0 }, low_quality_count: 0 },
     urls: { image: previewImage, preview: previewImage, quality_report: textDataUrl('# 虚构文档模板试运行质检\n\n版式、字段规则、安全标识与图像质量检查均已通过。', 'text/markdown;charset=utf-8'), report: textDataUrl('# Mock 质检报告\n\nPASS', 'text/markdown;charset=utf-8') },
     image_url: previewImage, completed_at: now(),
@@ -82,8 +85,11 @@ export const syntheticTemplateApi = {
   },
   publish: jobId => {
     const item = readStore(DRAFT_STORE, []).find(value => value.id === jobId);
+    if(!item)throw new Error('该文档模板草稿不存在，请刷新模板中心');
+    const published = item.published_template_id && readStore(TEMPLATE_STORE, []).find(value=>value.template_id===item.published_template_id);
+    if(published)return mockResult({...item,template_id:published.template_id,version:published.version,template:published,urls:{preview:previewImage}},220);
     const template = { ...item.template, template_id: id('DOC-TPL-FICT'), version: 'V1', version_count: 1, status: 'enabled', scope: 'custom', execution_engine: 'fictional-template-builder/mock-v1', field_count: item.template?.fields?.length || 0, cell_count: item.template?.cells?.length || 0, source_job_id: jobId, created_at: now(), updated_at: now() };
-    updateStore(TEMPLATE_STORE, [], values => [template, ...values]);
+    updateStore(TEMPLATE_STORE, [], values => [template, ...values.filter(value=>value.source_job_id!==jobId)]);
     const updated = { ...item, status: 'published', published_template_id: template.template_id, published_version: 'V1', updated_at: now() };
     updateStore(DRAFT_STORE, [], values => values.map(value => value.id === jobId ? updated : value));
     return mockResult({ ...updated, template_id: template.template_id, version: 'V1', template, urls: { preview: previewImage } }, 220);

@@ -63,7 +63,26 @@ export function validateAssignment(template,assignment){const defs=dimensions(te
 export function compileStage1(template,assignment,runtime){validateRuntime(runtime);validateAssignment(template,assignment);const fields=enabledFields(template);if(!fields.length)throw new Error('至少启用一个输出字段');if(fields.some(x=>!x.id||!x.overall_rule))throw new Error('启用字段必须有稳定ID和整体变化规则');const input={business_config:businessConfig(template),dimension_definitions:dimensions(template),assignment,event_definitions:events(template),output_fields:fields,runtime,output_schema:buildEventSchema(fields,runtime,template)};return makeCompiled(STAGE1_SYSTEM,input);}
 export function compileStage2(template,runtime,frozenRecord){validateRuntime(runtime);if(!frozenRecord?.event)throw new Error('frozen_event待阶段一生成并校验');const fields=enabledFields(template);const eventId=selectedEventId(frozenRecord.assignment||{});const selected=events(template).find(x=>(x.event_id||x.id)===eventId);if(!selected)throw new Error('冻结事件引用的事件定义已删除');const input={business_config:businessConfig(template),output_fields:fields,selected_event_definition:selected,runtime,frozen_event:frozenRecord.event,output_schema:buildSeriesSchema(fields,runtime.point_count)};return makeCompiled(STAGE2_SYSTEM,input);}
 
-export function samplePreviewAssignment(template,seed=20260908){const defs=dimensions(template);const eventDefs=events(template);const selected=eventDefs[Math.abs(seed)%eventDefs.length]||eventDefs[0];const eventId=selected.event_id||selected.id;const compatible=template.event_generation?.compatibility_rules?.[eventId]||[];const option=(dimensionId,optionId)=>{const dim=defs.find(item=>(item.dimension_id||item.id)===dimensionId);return {dimension_id:dimensionId,dimension_name:dim?.name||dimensionId,option_id:optionId,option_name:Object.entries(dim?.option_ids||{}).find(([,id])=>id===optionId)?.[0]||optionId};};return {selected_values:[option('event_type',eventId),...(compatible.length?[option('primary_event_stage',compatible[Math.abs(seed)%compatible.length])]:[]),option('cargo_type','chilled_goods'),option('environment','mild_warm')],not_applicable_dimensions:eventId==='normal'?['primary_event_stage']:[]};}
+export function samplePreviewAssignment(template,seed=20260908){
+  const defs=dimensions(template),eventDefs=events(template);
+  const eventDimension=defs.find(d=>(d.dimension_id||d.id)==='event_type');
+  const allowed=Object.values(eventDimension?.option_ids||{});
+  const candidates=eventDefs.filter(e=>allowed.includes(e.event_id||e.id));
+  const selected=candidates[Math.abs(seed)%candidates.length];
+  const eventId=selected?.event_id||selected?.id;
+  const compatible=template.event_generation?.compatibility_rules?.[eventId]||[];
+  const selected_values=defs.flatMap((dim,index)=>{
+    const dimension_id=dim.dimension_id||dim.id;
+    if(dimension_id==='primary_event_stage'&&eventId==='normal')return [];
+    let options=Object.entries(dim.option_ids||{});
+    if(dimension_id==='event_type')options=options.filter(([,id])=>id===eventId);
+    if(dimension_id==='primary_event_stage'&&compatible.length)options=options.filter(([,id])=>compatible.includes(id));
+    if(!options.length)return [];
+    const [option_name,option_id]=options[(Math.abs(seed)+index)%options.length];
+    return [{dimension_id,dimension_name:dim.name||dimension_id,option_id,option_name}];
+  });
+  return {selected_values,not_applicable_dimensions:eventId==='normal'?['primary_event_stage']:[]};
+}
 
 export const PREVIEW_RUNTIME={language:'zh-CN',start_time:'2026-09-08T08:00:00+08:00',timezone:'Asia/Shanghai',duration_minutes:720,step_minutes:15,point_count:48,interval_convention:'[start_index,end_index)'};
 export const DEMO_FROZEN_EVENT={event_brief:'冷藏货物运输观测窗口中，港口等待期间安排一次30分钟开门；箱温缓升，关门后恢复，货物响应滞后。',initial_values:{temperature_setpoint:4,ambient_temperature:25,supply_air_temperature:2,return_air_temperature:4,cargo_temperature:4.5,relative_humidity:65,latitude:30,longitude:120,power_status:1,transport_stage:'road',active_event_type:'normal',network_status:'online',return_air_temperature_observed:4.02},stage_plan:[{stage_id:'road',start_index:0,end_index:12},{stage_id:'port',start_index:12,end_index:24},{stage_id:'sea',start_index:24,end_index:48}],events:[{event_ref:'event_001',event_type_id:'door_open',stage_id:'port',start_index:16,end_index:18,parameters:[{name:'air_peak_delta_c',value:2,unit:'℃'},{name:'cargo_peak_delta_c',value:0.4,unit:'℃'},{name:'cargo_lag_minutes',value:30,unit:'min'}],affected_field_ids:['supply_air_temperature','return_air_temperature','cargo_temperature','return_air_temperature_observed'],response_windows:[{field_id:'supply_air_temperature',start_index:16,recovery_end_index:22},{field_id:'return_air_temperature',start_index:16,recovery_end_index:22},{field_id:'return_air_temperature_observed',start_index:16,recovery_end_index:22},{field_id:'cargo_temperature',start_index:18,recovery_end_index:26}]}],context_values:[{name:'baseline_air_c',value:4,unit:'℃'},{name:'baseline_cargo_c',value:4.5,unit:'℃'},{name:'baseline_supply_c',value:2,unit:'℃'},{name:'nominal_departure_index',value:24,unit:'point'},{name:'actual_departure_index',value:24,unit:'point'}],route_plan:[{stage_id:'road',waypoints:[{latitude:30,longitude:120},{latitude:30,longitude:121.5}],actual_start_index:0,nominal_duration_minutes:180,interpolation:'linear_by_elapsed_time'},{stage_id:'sea',waypoints:[{latitude:30,longitude:121.5},{latitude:31,longitude:123}],actual_start_index:24,nominal_duration_minutes:360,interpolation:'linear_by_elapsed_time'}]};

@@ -1,3 +1,4 @@
+import {ModelConfigField} from './ModelConfigField';
 import React, { useEffect, useState } from 'react';
 import {
   Alert, Badge, Button, Card, Checkbox, Col, Descriptions, Divider, Flex, Form, Image,
@@ -38,7 +39,7 @@ const STRATEGY_LABELS = {
 function PrivacyFieldEditor({ value={}, onChange }) {
   const strategies=value&&typeof value==='object'?value:{};
   const update=next=>onChange?.(next);
-  return <Row gutter={[12,12]}>{PRIVACY_FIELDS.map(item=><Col span={8} key={item.field}><Card size="small" title={item.label} extra={<Checkbox checked={Boolean(strategies[item.field])} onChange={event=>{const next={...strategies};if(event.target.checked)next[item.field]=item.strategies[0];else delete next[item.field];update(next);}}/>}><Select disabled={!strategies[item.field]} value={strategies[item.field]} style={{width:'100%'}} options={item.strategies.map(strategy=>({value:strategy,label:STRATEGY_LABELS[strategy]}))} onChange={strategy=>update({...strategies,[item.field]:strategy})}/></Card></Col>)}</Row>;
+  return <Row gutter={[12,12]}>{PRIVACY_FIELDS.map(item=><Col span={8} key={item.field}><Card size="small" title={item.label} extra={<Checkbox checked={Boolean(strategies[item.field])} onChange={event=>{const next={...strategies};if(event.target.checked)next[item.field]=item.strategies[0];else delete next[item.field];update(next);}}/>}><Select placeholder="请选择选项" disabled={!strategies[item.field]} value={strategies[item.field]} style={{width:'100%'}} options={item.strategies.map(strategy=>({value:strategy,label:STRATEGY_LABELS[strategy]}))} onChange={strategy=>update({...strategies,[item.field]:strategy})}/></Card></Col>)}</Row>;
 }
 
 function CoverageTargetsEditor({ value=[], onChange, count }) {
@@ -47,8 +48,8 @@ function CoverageTargetsEditor({ value=[], onChange, count }) {
   if(!rows.length)return <Alert type="info" showIcon message="当前模板未配置样本标签" description="本次任务不执行标签生成、覆盖率质检和按标签缺口扩增；其它字段、物理和隐私质检仍正常执行。"/>;
   return <><Alert type="info" showIcon message="标签枚举来自模板，本次任务只配置覆盖目标" description="系统默认每个标签权重为 1、最低 PASS 为 1 票。最低 PASS 表示该标签至少要有多少票通过质检；REVIEW 和 REJECT 不计入。"/><Table className="section-title" size="small" pagination={false} rowKey="profile_id" dataSource={rows} columns={[
     {title:'标签',dataIndex:'label',render:value=><Text strong>{value}</Text>},
-    {title:'目标权重',render:(_,row,index)=><InputNumber value={row.target_weight} min={0.1} max={1000} style={{width:160}} onChange={target_weight=>update(index,{target_weight})}/>},
-    {title:'最低 PASS',render:(_,row,index)=><InputNumber value={row.minimum_pass_count} min={0} max={count} addonAfter="票" style={{width:180}} onChange={minimum_pass_count=>update(index,{minimum_pass_count})}/>},
+    {title:'目标权重',render:(_,row,index)=><InputNumber placeholder="请输入目标权重（0.1～1000）" value={row.target_weight} min={0.1} max={1000} style={{width:160}} onChange={target_weight=>update(index,{target_weight})}/>},
+    {title:'最低 PASS',render:(_,row,index)=><InputNumber placeholder="请输入最低 PASS（不小于 0）" value={row.minimum_pass_count} min={0} max={count} addonAfter="票" style={{width:180}} onChange={minimum_pass_count=>update(index,{minimum_pass_count})}/>},
   ]}/></>;
 }
 
@@ -123,11 +124,11 @@ export function ColdChainTemplateSelectionFields({ form }) {
   return <>
     <Alert type="info" showIcon message="选择已发布的时序模板" description="模板锁定事件提示词、异常事件候选、规则引擎和默认参数；任务创建时会保存不可变模板快照。"/>
     <Row gutter={16} className="section-title">
-      <Col span={18}><Form.Item name="coldchainTemplateId" label="时序模板" rules={[{required:true,message:'请选择时序模板'}]}><Select loading={loading} showSearch optionFilterProp="label" placeholder="从模板中心选择已发布模板" options={templates.map(item=>({value:item.template_id,label:`${item.name} · ${item.version} · ${item.scope==='official'?'官方':'自定义'}`}))}/></Form.Item></Col>
-      <Col span={6}><Form.Item name="coldchainTemplateVersion" label="模板版本" rules={[{required:true}]}><Input readOnly/></Form.Item></Col>
+      <Col span={18}><Form.Item name="coldchainTemplateId" label="时序模板" rules={[{required:true,message:'请选择时序模板'}]}><Select loading={loading} showSearch optionFilterProp="label" placeholder="从模板中心选择已发布模板" options={templates.map(item=>({value:item.template_id,label:`${item.name} · ${item.scope==='official'?'官方':'自定义'}`}))}/></Form.Item></Col>
+      <Col style={{display:'none'}}><Form.Item name="coldchainTemplateVersion" hidden rules={[{required:true}]}><Input readOnly/></Form.Item></Col>
     </Row>
     {!templates.length&&!loading&&<Alert type="warning" showIcon message="暂无可用时序模板" description="请先到模板中心制作并发布时序模板。"/>}
-    {detail&&<Card size="small" title="模板快照预览" extra={<Space><Tag color="blue">{detail.version}</Tag><Tag color={detail.scope==='official'?'green':'default'}>{detail.scope==='official'?'官方模板':'自定义模板'}</Tag></Space>}>
+    {detail&&<Card size="small" title="模板快照预览" extra={<Space><Tag color={detail.scope==='official'?'green':'default'}>{detail.scope==='official'?'官方模板':'自定义模板'}</Tag></Space>}>
       <Descriptions size="small" column={2} items={[
         {key:'id',label:'模板 ID',children:<Text copyable>{detail.template_id}</Text>},
         {key:'engine',label:'规则引擎',children:config.rule_engine?.engine_id||'-'},
@@ -150,10 +151,10 @@ export function ColdChainGenerationFields({ form }) {
   return <>
     <Alert type="success" showIcon message="填写随机种子和票数，并选择需要交付的参数；路线、货物和事件由系统自动选择。"/>
     <Row gutter={18} className="section-title">
-      <Col span={6}><Form.Item name="seed" label="随机种子" rules={[{required:true}]} tooltip="同一模板版本、配置和种子会得到相同路线、事件和数值。"><InputNumber min={1} max={2147483647} style={{width:'100%'}}/></Form.Item></Col>
-      <Col span={6}><Form.Item name="count" label="生成票数" rules={[{required:true}]} tooltip="一票是一只冷藏集装箱的完整国际运输序列。"><InputNumber min={1} max={20} style={{width:'100%'}} addonAfter="票"/></Form.Item></Col>
-      <Col span={6}><Form.Item name="sampleIntervalMinutes" label="采样间隔" rules={[{required:true}]}><Select options={[10,15,30,60].map(value=>({value,label:`每 ${value} 分钟`}))}/></Form.Item></Col>
-      <Col span={6}><Form.Item name="modelAlias" label="事件生成模型" rules={[{required:true}]} tooltip="模型只生成受模板约束的事件说明，不生成温湿度或坐标数值。"><Select options={[{value:'qwen3-14b',label:'Qwen3-14B（非思考模式）'}]}/></Form.Item></Col>
+      <Col span={6}><Form.Item name="seed" label="随机种子" rules={[{required:true}]} tooltip="同一模板、配置和种子会得到相同路线、事件和数值。"><InputNumber placeholder="请输入随机种子（1～2147483647）" min={1} max={2147483647} style={{width:'100%'}}/></Form.Item></Col>
+      <Col span={6}><Form.Item name="count" label="生成票数" rules={[{required:true}]} tooltip="一票是一只冷藏集装箱的完整国际运输序列。"><InputNumber placeholder="请输入生成票数（1～20）" min={1} max={20} style={{width:'100%'}} addonAfter="票"/></Form.Item></Col>
+      <Col span={6}><Form.Item name="sampleIntervalMinutes" label="采样间隔" rules={[{required:true}]}><Select placeholder="请选择采样间隔" options={[10,15,30,60].map(value=>({value,label:`每 ${value} 分钟`}))}/></Form.Item></Col>
+      <Col span={6}><ModelConfigField><Form.Item name="modelAlias" label="事件生成模型" rules={[{required:true}]} tooltip="模型只生成受模板约束的事件说明，不生成温湿度或坐标数值。"><Select placeholder="请选择事件生成模型" options={[{value:'qwen3-14b',label:'Qwen3-14B（非思考模式）'}]}/></Form.Item></ModelConfigField></Col>
     </Row>
     <Form.Item name="parameters" label="生成参数" rules={[{type:'array',min:1,message:'至少选择一个输出参数'}]} tooltip="时间戳、票号、箱号、采样间隔和温度单位始终保留。">
       <Checkbox.Group style={{width:'100%'}}><Row gutter={[12,10]}>{availableParameterOptions.filter(item=>availableParameters.includes(item.value)).map(item=><Col span={8} key={item.value}><Checkbox value={item.value}>{item.label}</Checkbox></Col>)}</Row></Checkbox.Group>
@@ -190,9 +191,9 @@ export function ColdChainAugmentationFields({ form, standalone = false }) {
     <Card className="section-title" size="small" title="通用多样性增强" extra={standalone?<Tag color="green">已启用</Tag>:<Form.Item name="enableAugmentation" valuePropName="checked" noStyle><Switch/></Form.Item>}>
       <Form.Item name="augmentationMethods" label="增强方式" rules={[{validator:(_,value)=>!enabled||value?.length?Promise.resolve():Promise.reject(new Error('至少选择一种增强方式'))}]}><Checkbox.Group disabled={!enabled} options={AUGMENTATION_OPTIONS}/></Form.Item>
       <Row gutter={16}>
-        <Col span={8}><Form.Item name="augmentationRatio" label="增强比例"><InputNumber disabled={!enabled} min={10} max={100} addonAfter="%" style={{width:'100%'}}/></Form.Item></Col>
-        <Col span={8}><Form.Item name="augmentationIntensity" label="增强强度"><Select disabled={!enabled} options={[{value:'light',label:'轻度'},{value:'medium',label:'中度'}]}/></Form.Item></Col>
-        <Col span={8}><Form.Item name="augmentationMaxNew" label="最大新增票数"><InputNumber disabled={!enabled} min={0} max={Math.max(0,20-count)} style={{width:'100%'}} addonAfter="票"/></Form.Item></Col>
+        <Col span={8}><Form.Item name="augmentationRatio" label="增强比例"><InputNumber placeholder="请输入增强比例（10～100）" disabled={!enabled} min={10} max={100} addonAfter="%" style={{width:'100%'}}/></Form.Item></Col>
+        <Col span={8}><Form.Item name="augmentationIntensity" label="增强强度"><Select placeholder="请选择增强强度" disabled={!enabled} options={[{value:'light',label:'轻度'},{value:'medium',label:'中度'}]}/></Form.Item></Col>
+        <Col span={8}><Form.Item name="augmentationMaxNew" label="最大新增票数"><InputNumber placeholder="请输入最大新增票数（不小于 0）" disabled={!enabled} min={0} max={Math.max(0,20-count)} style={{width:'100%'}} addonAfter="票"/></Form.Item></Col>
       </Row>
       <Alert type="success" showIcon message={`预计新增 ${estimated} 票；原始 ${count} 票保持不变`} description="增强幅度被限制在既有质量规则的可接受范围内。"/>
     </Card>
@@ -240,7 +241,7 @@ export function ColdChainQualityFields({ form, mode = 'combined', standalone = f
     {showExpansion&&<Card className="section-title" size="small" title="质检驱动定向扩增" extra={standalone?<Tag color="green">已启用</Tag>:<Form.Item name="enableExpansion" valuePropName="checked" noStyle><Switch disabled={!enableQuality || maxAllowed===0}/></Form.Item>}>
       <Paragraph type="secondary">默认关闭。开启后根据 PASS 标签覆盖缺口生成新的独立样本；低质样本只保留标记、不返工。</Paragraph>
       {enableExpansion && enableQuality && <>
-        <Form.Item name="maxExpansionCount" label="最大扩增数量" rules={[{required:true}]} tooltip={`初始 ${count} 票，MVP 最终最多 20 票。`}><InputNumber min={1} max={maxAllowed} style={{width:260}} addonAfter={`票（最多 ${maxAllowed}）`}/></Form.Item>
+        <Form.Item name="maxExpansionCount" label="最大扩增数量" rules={[{required:true}]} tooltip={`初始 ${count} 票，MVP 最终最多 20 票。`}><InputNumber placeholder="请输入最大扩增数量（不小于 1）" min={1} max={maxAllowed} style={{width:260}} addonAfter={`票（最多 ${maxAllowed}）`}/></Form.Item>
         <Divider orientation="left">本次任务的标签覆盖目标</Divider>
         <Form.Item name="coverageTargets" noStyle><CoverageTargetsEditor count={count}/></Form.Item>
       </>}
@@ -267,7 +268,7 @@ function buildPayload(form) {
 
 export async function createColdChainBackendJob(form) {
   const values=form.getFieldsValue(true);
-  if(!values.coldchainTemplateId||!values.coldchainTemplateVersion)throw new Error('请选择有效的时序模板版本');
+  if(!values.coldchainTemplateId||!values.coldchainTemplateVersion)throw new Error('请选择有效的时序模板');
   return coldchainApi.createJob(buildPayload(form));
 }
 
@@ -275,9 +276,9 @@ export function ColdChainSubmissionSummary({ form }) {
   const values=form.getFieldsValue(true);
   const enhanced=values.enableAugmentation?Math.min(Number(values.augmentationMaxNew||0),Math.ceil(Number(values.count||0)*Number(values.augmentationRatio||0)/100),Math.max(0,20-Number(values.count||0))):0;
   return <>
-    <Alert type="info" showIcon message="点击“提交任务”后启动冷链生成 Mock" description="模板版本、模型、规则配置和增强设置会固化进模拟任务记录；任务完成后自动写入数据中心。"/>
+    <Alert type="info" showIcon message="点击“提交任务”后启动冷链生成 Mock" description="模板、模型、规则配置和增强设置会固化进模拟任务记录；任务完成后自动写入数据中心。"/>
     <Descriptions bordered size="small" column={2} className="section-title" items={[
-      {key:'template',label:'模板',children:`${values.coldchainTemplateName||values.coldchainTemplateId||'-'} / ${values.coldchainTemplateVersion||'-'}`},
+      {key:'template',label:'模板',children:`${values.coldchainTemplateName||values.coldchainTemplateId||'-'}`},
       {key:'count',label:'原始票数',children:`${values.count||0} 票`},
       {key:'model',label:'叙事模型',children:values.modelAlias==='local-deterministic'?'本地确定性模式':values.modelAlias||'qwen3-14b'},
       {key:'interval',label:'采样间隔',children:`每 ${values.sampleIntervalMinutes||60} 分钟`},

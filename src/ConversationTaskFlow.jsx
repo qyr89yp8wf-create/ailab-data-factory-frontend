@@ -1,3 +1,4 @@
+import {ModelConfigField} from './ModelConfigField';
 import React, { useEffect, useMemo, useState } from 'react';
 import {
   Alert, Badge, Button, Card, Checkbox, Col, Descriptions, Divider, Empty, Flex,
@@ -108,7 +109,7 @@ export function ConversationTemplateSelectionFields({ form }) {
     return () => { active = false; };
   }, [templateId, form]);
   const options = templates.map(item => ({
-    label:`${item.name} · ${item.version} · ${item.rule_card_count} 张规则卡`, value:item.template_id,
+    label:`${item.name} · ${item.rule_card_count} 张规则卡`, value:item.template_id,
   }));
   const selected = detail?.selected_version || {};
   const prompt = selected.prompt_generation || {};
@@ -119,13 +120,13 @@ export function ConversationTemplateSelectionFields({ form }) {
   const qualityRules = (configuration.quality?.scenario_rules || []).filter(item => item.enabled !== false);
   const effectiveToolMode = tools.enabled === false ? 'none' : (tools.mode || prompt.tool_mode || 'none');
   return <>
-    <Alert type="info" showIcon message="任务只选择已经配置好的对话模板" description="场景、角色、目标、约束、事实状态机、知识规则和工具方式均由模板版本提供；提交任务时固化不可变快照。"/>
+    <Alert type="info" showIcon message="任务只选择已经配置好的对话模板" description="场景、角色、目标、约束、事实状态机、知识规则和工具方式均由模板提供；提交任务时固化不可变快照。"/>
     <Row gutter={16} className="section-title">
       <Col span={18}><Form.Item name="conversationTemplateId" label="对话模板" rules={[{required:true,message:'请选择对话模板'}]}><Select loading={loading} showSearch optionFilterProp="label" options={options} placeholder="从模板中心选择已启用模板"/></Form.Item></Col>
-      <Col span={6}><Form.Item name="conversationTemplateVersion" label="模板版本" rules={[{required:true}]}><Input readOnly/></Form.Item></Col>
+      <Col style={{display:'none'}}><Form.Item name="conversationTemplateVersion" hidden rules={[{required:true}]}><Input readOnly/></Form.Item></Col>
     </Row>
     {!templates.length && !loading && <Alert type="warning" showIcon message="暂无已启用的对话模板" description="请先到模板中心创建并启用对话模板。"/>}
-    {detail && <Card size="small" title="模板快照预览" extra={<Space><Tag color="blue">{detail.version}</Tag><Badge status="success" text="已启用"/></Space>}>
+    {detail && <Card size="small" title="模板快照预览" extra={<Space><Badge status="success" text="已启用"/></Space>}>
       <Descriptions size="small" column={2} items={[
         {key:'id',label:'模板 ID',children:<Text copyable>{detail.template_id}</Text>},
         {key:'business',label:'业务类型',children:detail.business_type},
@@ -148,14 +149,14 @@ export function ConversationGenerationFields({ form }) {
   return <>
     <Alert type="info" showIcon message="配置本次生成批次" description="模板负责“生成什么”；此处设置数量、对话轮数、随机性、模型和交付格式。一轮从一条 user 消息开始，到对应 assistant 的最终文本回答结束；中间的工具调用和工具返回仍属于同一轮。"/>
     <Row gutter={16} className="section-title">
-      <Col span={6}><Form.Item name="count" label="目标原始样本数" rules={[{required:true}]}><InputNumber min={1} max={200} style={{width:'100%'}}/></Form.Item></Col>
-      <Col span={6}><Form.Item name="turnMin" label="最少对话轮数" tooltip="一轮=user发起，到assistant最终文本回答结束；中间工具轨迹不另计轮数。" rules={[{required:true}]}><InputNumber min={1} max={15} style={{width:'100%'}}/></Form.Item></Col>
-      <Col span={6}><Form.Item name="turnMax" label="最多对话轮数" dependencies={['turnMin']} rules={[{required:true},{validator:(_,value)=>value>=Number(form.getFieldValue('turnMin'))?Promise.resolve():Promise.reject(new Error('不能小于最少对话轮数'))}]}><InputNumber min={1} max={15} style={{width:'100%'}}/></Form.Item></Col>
-      <Col span={6}><Form.Item name="seed" label="随机种子" tooltip="相同模板版本、配置和随机种子可复现本地 Mock 结果。" rules={[{required:true}]}><InputNumber min={1} max={2147483647} style={{width:'100%'}}/></Form.Item></Col>
+      <Col span={6}><Form.Item name="count" label="目标原始样本数" rules={[{required:true}]}><InputNumber placeholder="请输入目标原始样本数（1～200）" min={1} max={200} style={{width:'100%'}}/></Form.Item></Col>
+      <Col span={6}><Form.Item name="turnMin" label="最少对话轮数" tooltip="一轮=user发起，到assistant最终文本回答结束；中间工具轨迹不另计轮数。" rules={[{required:true}]}><InputNumber placeholder="请输入最少对话轮数（1～15）" min={1} max={15} style={{width:'100%'}}/></Form.Item></Col>
+      <Col span={6}><Form.Item name="turnMax" label="最多对话轮数" dependencies={['turnMin']} rules={[{required:true},{validator:(_,value)=>value>=Number(form.getFieldValue('turnMin'))?Promise.resolve():Promise.reject(new Error('不能小于最少对话轮数'))}]}><InputNumber placeholder="请输入最多对话轮数（1～15）" min={1} max={15} style={{width:'100%'}}/></Form.Item></Col>
+      <Col span={6}><Form.Item name="seed" label="随机种子" tooltip="相同模板、配置和随机种子可复现本地 Mock 结果。" rules={[{required:true}]}><InputNumber placeholder="请输入随机种子（1～2147483647）" min={1} max={2147483647} style={{width:'100%'}}/></Form.Item></Col>
       <Col span={8}><Form.Item name="provider" label="生成方式"><Radio.Group optionType="button" buttonStyle="solid" options={[{label:'本地 Mock',value:'mock'},{label:'API',value:'bailian'}]}/></Form.Item></Col>
-      <Col span={8}><Form.Item name="modelAlias" label="API 模型" rules={[{required:provider==='bailian',message:'请选择 API 模型'}]}><Select disabled={provider==='mock'} options={API_MODEL_OPTIONS} placeholder={provider==='mock'?'本地 Mock 不调用模型':'请选择模型'}/></Form.Item></Col>
-      <Col span={8}><Form.Item name="temperature" label="Temperature"><InputNumber min={0} max={2} step={0.1} disabled={provider==='mock'} style={{width:'100%'}}/></Form.Item></Col>
-      <Col span={8}><Form.Item name="enableThinking" label="思考模式" valuePropName="checked"><Switch disabled={provider==='mock'} checkedChildren="开启" unCheckedChildren="关闭"/></Form.Item></Col>
+      <Col span={24}><ModelConfigField model={<Form.Item name="modelAlias" label="API 模型" rules={[{required:provider==='bailian',message:'请选择 API 模型'}]}><Select disabled={provider==='mock'} options={API_MODEL_OPTIONS} placeholder={provider==='mock'?'本地 Mock 不调用模型':'请选择模型'}/></Form.Item>} parameters={<Row gutter={16}><Col span={12}><Form.Item name="temperature" label="Temperature"><InputNumber placeholder="请输入Temperature（0～2）" min={0} max={2} step={0.1} disabled={provider==='mock'} style={{width:'100%'}}/></Form.Item></Col><Col span={12}><Form.Item name="enableThinking" label="思考模式" valuePropName="checked"><Switch disabled={provider==='mock'} checkedChildren="开启" unCheckedChildren="关闭"/></Form.Item></Col></Row>}/></Col>
+      
+      
     </Row>
     <Alert type={provider==='mock'?'success':'warning'} showIcon message={provider==='mock'?'本次不会产生付费调用':`原始数据预计 ${count*2} 次模型调用`} description={provider==='mock'?'使用本地确定性模板验证完整异步任务链路。':'每条数据调用一次模型生成事实与状态机，再调用一次生成完整对话；语义质检和扩增可能增加调用。'}/>
   </>;
@@ -172,11 +173,11 @@ export function ConversationAugmentationFields({ form, standalone = false }) {
       <Paragraph type="secondary">从原始候选中抽取种子，每条增强数据调用一次模型，并保留 source_conversation_id 血缘。标签只能从模板定义的允许值中重新选择。</Paragraph>
       <Form.Item name="augmentationMethods" label="增强方式" rules={[{validator:(_,value)=>!enabled||value?.length?Promise.resolve():Promise.reject(new Error('至少选择一种增强方式'))}]}><Checkbox.Group disabled={!enabled} options={AUGMENTATION_OPTIONS}/></Form.Item>
       <Row gutter={16}>
-        <Col span={6}><Form.Item name="augmentationRatio" label="对原始样本的增强比例"><InputNumber min={1} max={100} addonAfter="%" disabled={!enabled} style={{width:'100%'}}/></Form.Item></Col>
-        <Col span={6}><Form.Item name="augmentationMaxNew" label="最大新增上限"><InputNumber min={0} max={200} disabled={!enabled} style={{width:'100%'}}/></Form.Item></Col>
-        <Col span={6}><Form.Item name="augmentationModelAlias" label="增强 API 模型" rules={[{required:enabled,message:'请选择增强模型'}]}><Select disabled={!enabled} options={API_MODEL_OPTIONS}/></Form.Item></Col>
+        <Col span={6}><Form.Item name="augmentationRatio" label="对原始样本的增强比例"><InputNumber placeholder="请输入对原始样本的增强比例（1～100）" min={1} max={100} addonAfter="%" disabled={!enabled} style={{width:'100%'}}/></Form.Item></Col>
+        <Col span={6}><Form.Item name="augmentationMaxNew" label="最大新增上限"><InputNumber placeholder="请输入最大新增上限（0～200）" min={0} max={200} disabled={!enabled} style={{width:'100%'}}/></Form.Item></Col>
+        <Col span={6}><ModelConfigField><Form.Item name="augmentationModelAlias" label="增强 API 模型" rules={[{required:enabled,message:'请选择增强模型'}]}><Select placeholder="请选择增强 API 模型" disabled={!enabled} options={API_MODEL_OPTIONS}/></Form.Item></ModelConfigField></Col>
         <Col span={6}><Form.Item name="augmentationEnableThinking" label="思考模式" valuePropName="checked"><Switch disabled={!enabled} checkedChildren="开启" unCheckedChildren="关闭"/></Form.Item></Col>
-        <Col span={6}><Form.Item name="augmentationTemperature" label="Temperature"><InputNumber min={0} max={2} step={0.1} disabled={!enabled} style={{width:'100%'}}/></Form.Item></Col>
+        <Col span={6}><Form.Item name="augmentationTemperature" label="Temperature"><InputNumber placeholder="请输入Temperature（0～2）" min={0} max={2} step={0.1} disabled={!enabled} style={{width:'100%'}}/></Form.Item></Col>
       </Row>
       <Alert type="warning" showIcon message={`预计新增约 ${estimated} 条，并产生约 ${estimated} 次增强模型调用`} description="每条增强结果都会重新生成标签、执行结构校验并进入后续质检。"/>
     </Card>
@@ -197,11 +198,11 @@ export function ConversationQualityExpansionFields({ form, mode = 'combined', st
     {showQuality&&<><Divider orientation="left">质检规则包快照</Divider><Row gutter={[12,12]}>{QUALITY_RULE_PACK_SUMMARY.map(item=><Col span={8} key={item.key}><Card size="small"><Flex justify="space-between"><Text strong>{item.name}</Text><Tag color={item.color}>{item.count} 项</Tag></Flex><Paragraph type="secondary">{item.examples}</Paragraph><Text type="secondary">引擎：{item.engine}</Text></Card></Col>)}</Row></>}
     {showQuality&&<Divider orientation="left">检测器配置</Divider>}
     <Row gutter={16}>
-      {showQuality&&<Col span={6}><Form.Item name="duplicateThreshold" label="跨样本近重复阈值"><InputNumber min={0.5} max={1} step={0.01} style={{width:'100%'}}/></Form.Item></Col>}
-      <Col span={6}><Form.Item name="qualityModelAlias" label="LLM 质检与扩增模型" rules={[{required:true}]}><Select options={API_MODEL_OPTIONS}/></Form.Item></Col>
-      {showQuality&&<Col span={6}><Form.Item name="embeddingModelAlias" label="Embedding 检测模型" rules={[{required:true}]}><Select options={EMBEDDING_MODEL_OPTIONS}/></Form.Item></Col>}
+      {showQuality&&<Col span={6}><Form.Item name="duplicateThreshold" label="跨样本近重复阈值"><InputNumber placeholder="请输入跨样本近重复阈值（0.5～1）" min={0.5} max={1} step={0.01} style={{width:'100%'}}/></Form.Item></Col>}
+      <Col span={6}><ModelConfigField><Form.Item name="qualityModelAlias" label="LLM 质检与扩增模型" rules={[{required:true}]}><Select placeholder="请选择LLM 质检与扩增模型" options={API_MODEL_OPTIONS}/></Form.Item></ModelConfigField></Col>
+      {showQuality&&<Col span={6}><ModelConfigField><Form.Item name="embeddingModelAlias" label="Embedding 检测模型" rules={[{required:true}]}><Select placeholder="请选择Embedding 检测模型" options={EMBEDDING_MODEL_OPTIONS}/></Form.Item></ModelConfigField></Col>}
       <Col span={6}><Form.Item name="qualityEnableThinking" label="思考模式" valuePropName="checked"><Switch checkedChildren="开启" unCheckedChildren="关闭"/></Form.Item></Col>
-      <Col span={6}><Form.Item name="qualityTemperature" label="Temperature"><InputNumber min={0} max={2} step={0.1} style={{width:'100%'}}/></Form.Item></Col>
+      <Col span={6}><Form.Item name="qualityTemperature" label="Temperature"><InputNumber placeholder="请输入Temperature（0～2）" min={0} max={2} step={0.1} style={{width:'100%'}}/></Form.Item></Col>
     </Row>
     {showQuality&&<Alert type="success" showIcon message="规则调用量按样本 × 已启用检测器估算" description="确定性规则本地批量执行；LLM 与 Embedding 检测器单独计费。执行失败会写入 evaluator_errors，不能被当作 PASS。"/>}
     {showQuality&&<Card size="small" className="section-title" title="隐私检查与自动脱敏" extra={<Space><Tag color="green">默认启用</Tag><Tag>系统固定策略</Tag></Space>}>
@@ -210,7 +211,7 @@ export function ConversationQualityExpansionFields({ form, mode = 'combined', st
     </Card>}
     {showExpansion&&<Card size="small" title="质检驱动定向扩增" extra={standalone?<Tag color="green">已启用</Tag>:<Form.Item name="enableExpansion" valuePropName="checked" noStyle><Switch/></Form.Item>}>
       <Paragraph type="secondary">按所选模板试运行形成的覆盖类型计算 PASS 数量缺口，新增独立事实、单条 Prompt 和对话后全量复检。不同模板会自动使用各自的覆盖类型。</Paragraph>
-      <Form.Item name="maxNew" label="最大新增样本数" rules={[{validator:(_,value)=>!enabled||Number(value)>=0?Promise.resolve():Promise.reject(new Error('请设置扩增上限'))}]}><InputNumber min={0} max={100} disabled={!enabled} style={{width:240}}/></Form.Item>
+      <Form.Item name="maxNew" label="最大新增样本数" rules={[{validator:(_,value)=>!enabled||Number(value)>=0?Promise.resolve():Promise.reject(new Error('请设置扩增上限'))}]}><InputNumber placeholder="请输入最大新增样本数（0～100）" min={0} max={100} disabled={!enabled} style={{width:240}}/></Form.Item>
       <Divider orientation="left">逐标签扩增数量</Divider>
       <Alert type="info" showIcon message="留空时使用系统建议值" description="系统默认值为均匀目标数量减PASS数量；手工填写后覆盖该标签的建议数量。多维标签会组合生成，一条样本可同时补足多个维度。"/>
       <Form.List name="coverageOverrides">{fields=><Table className="section-title" size="small" pagination={false} rowKey="key" dataSource={fields.map((field,index)=>({key:field.key,field,index,...coverageOverrides[index]}))} columns={[
@@ -231,7 +232,7 @@ export function ConversationSubmissionSummary({ form }) {
   return <>
     <Alert type="info" showIcon message="点击“提交任务”后创建对话合成 Mock" description="提交成功后自动返回对话类数据任务列表；新任务出现在第一行，并可查看模拟阶段日志和结果。"/>
     <Descriptions bordered size="small" column={2} className="section-title" items={[
-      {key:'template',label:'模板',children:`${values.conversationTemplateName||values.conversationTemplateId||'-'} / ${values.conversationTemplateVersion||'-'}`},
+      {key:'template',label:'模板',children:`${values.conversationTemplateName||values.conversationTemplateId||'-'}`},
       {key:'count',label:'原始样本',children:`${values.count||0} 条`},
       {key:'turn',label:'对话轮数范围',children:`${values.turnMin||0}～${values.turnMax||0} 轮`},
       {key:'provider',label:'生成模型',children:values.provider==='mock'?'本地 Mock':values.modelAlias},
@@ -248,7 +249,7 @@ export function ConversationSubmissionSummary({ form }) {
 
 export async function createConversationBackendJob(form) {
   const values = form.getFieldsValue(true);
-  if (!values.conversationTemplateId || !values.conversationTemplateVersion) throw new Error('请选择有效的对话模板版本');
+  if (!values.conversationTemplateId || !values.conversationTemplateVersion) throw new Error('请选择有效的对话模板');
   return conversationApi.createJob({
     template_id:values.conversationTemplateId, template_version:values.conversationTemplateVersion,
     count:Number(values.count), seed:Number(values.seed), turn_range:[Number(values.turnMin),Number(values.turnMax)],
@@ -278,7 +279,7 @@ export function ConversationTaskInformation({ task }) {
     ]}/>
     <Divider orientation="left">配置快照</Divider>
     <Descriptions bordered size="small" column={2} items={[
-      {key:'template',label:'模板',children:`${snapshot.template_name||values.conversationTemplateId||'-'} / ${snapshot.template_version||values.conversationTemplateVersion||'-'}`},
+      {key:'template',label:'模板',children:`${snapshot.template_name||values.conversationTemplateId||'-'}`},
       {key:'planning',label:'事实与扩增来源',children:snapshot.planning_source==='published_trial_contract'?'已发布模板试运行契约':snapshot.planning_source||'-'},
       {key:'rules',label:'长期规则卡',children:`${snapshot.rule_card_count??'-'} 张`},
       {key:'tool',label:'工具方式',children:toolModeLabels[params.prompt_generation?.tool_mode]||'-'},

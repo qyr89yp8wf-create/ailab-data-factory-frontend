@@ -1,0 +1,35 @@
+import assert from 'node:assert/strict';
+import {beginUploadCheck,stopUploadCheck,tickUploadCheck,uploadStatus,resolveUpload,uploadFindingGroups} from '../src/uploadCheckState.js';
+const draft={version:'V1',source:'UPLOAD-1',publicationStatus:'草稿',samples:100,uploadFiles:[{name:'clean.zip',uid:'a'}]};
+const finish=v=>{for(let i=0;i<5;i++)v=tickUploadCheck(v);return v;};
+assert.equal(uploadStatus({}),'已发布');
+let v=beginUploadCheck(draft);
+assert.equal(uploadStatus(v),'校验中');
+assert.equal(beginUploadCheck(v),v);
+v=stopUploadCheck(tickUploadCheck(v));
+assert.equal(uploadStatus(v),'草稿');
+assert.equal(v.uploadFiles.length,1);
+v=finish(beginUploadCheck(v));
+assert.equal(uploadStatus(v),'已发布');
+assert.equal(v.uploadRuns.length,2);
+assert.equal(v.uploadFiles[0].name,'clean.zip');
+assert.equal(beginUploadCheck(v),v);
+const mixed=finish(beginUploadCheck({...draft,uploadFiles:[{name:'one.zip',uid:'a'},{name:'two.zip',uid:'b'}]}));
+assert.equal(uploadStatus(mixed),'待处理');
+const findings=mixed.uploadRuns.at(-1).findings;
+assert.deepEqual(new Set(findings.map(f=>f.category)),new Set(['隐私质检','安全质检','数据基本结构']));
+const groups=uploadFindingGroups(mixed,findings);
+assert.equal(groups.length,2);
+assert.equal(groups.reduce((n,g)=>n+g.findings.length,0),findings.length);
+assert.throws(()=>resolveUpload(mixed,'mask',{S02:'全掩码',S11:'泛化'}));
+const released=resolveUpload(mixed,'maskDelete',{S02:'全掩码',S11:'泛化'});
+assert.equal(released.samples,98);
+assert.equal(uploadStatus(released),'已发布');
+assert.equal(released.excludedSampleIds.length,2);
+for(const name of ['fail.zip','error.zip']){
+ const failed=finish(beginUploadCheck({...draft,uploadFiles:[{name}]}));
+ assert.equal(uploadStatus(failed),'校验失败');
+ assert.throws(()=>resolveUpload(failed,'delete'));
+ assert.equal(resolveUpload(failed,'edit').publicationStatus,'草稿');
+}
+console.log('PASS: upload stop/retry, archive grouping, mixed treatment, fatal and detector error gates');

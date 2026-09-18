@@ -1,13 +1,13 @@
 {
-  "name": "data-factory-user-portal-v4",
-  "version": "4.0.0",
+  "name": "data-factory-user-portal-v5",
+  "version": "5.0.0",
   "private": true,
   "type": "module",
   "scripts": {
-    "dev": "vite --host 127.0.0.1 --port 8768",
+    "dev": "vite --host 127.0.0.1 --port 8769",
     "build": "vite build",
-    "test": "node tests/conversationPromptCompiler.test.mjs && node tests/timeSeriesPromptCompiler.test.mjs && node tests/taskCenterRefactor.test.mjs",
-    "preview": "vite preview --host 127.0.0.1 --port 8768"
+    "test": "node scripts/run-tests.mjs",
+    "preview": "vite preview --host 127.0.0.1 --port 8769"
   },
   "dependencies": {
     "@ant-design/icons": "latest",
