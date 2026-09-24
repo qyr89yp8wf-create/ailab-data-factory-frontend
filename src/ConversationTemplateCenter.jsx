@@ -167,6 +167,7 @@ const DEFAULT_SCENARIO_RULES = QUALITY_PRESETS.filter(item => ['DINGO_FAITHFULNE
 
 const INITIAL_VALUES = {
   ...CONVERSATION_INITIAL_VALUES,
+  customPlanFields: [],
   name: '物流智能客服对话模板',
   description: '用于合成物流咨询多轮对话，覆盖物流状态查询、运输时效、运费与包装咨询，以及延误、物流停滞等异常问题，训练客服的信息追问、工具调用、结果解释和问题处理能力。',
   businessType: '咨询问答',
@@ -362,6 +363,7 @@ function configurationFromValues(values) {
       user_role_markdown: values.userRoleMarkdown,
     },
     sampler,
+    custom_plan_fields: (values.customPlanFields || []).filter(f => f && String(f.field_id || '').trim()).map(f => ({ field_id: String(f.field_id).trim(), type: f.type || '文本', description: f.description || '' })),
     knowledge: knowledgeEnabled ? {
       enabled: true,
       mode: 'knowledge_cards',
@@ -508,6 +510,7 @@ function valuesFromDetail(detail) {
     fewShotDialogueJsonl: fewShot.dialogue_jsonl || '',
     fewShotKnowledgeJsonl: fewShot.knowledge_jsonl || '',
     fewShotToolJsonl: fewShot.tool_jsonl || '',
+    customPlanFields: (config.custom_plan_fields ?? INITIAL_VALUES.customPlanFields ?? []).filter(f => !SYSTEM_EVENT_FIELD_IDS.includes(String(f?.field_id || '').trim())).map(f => ({ field_id: f.field_id || '', type: f.type || '文本', description: f.description || '' })),
     scenarioRules,
     qualityRuleIds: (quality.selected_rule_ids ?? DEFAULT_CONVERSATION_RULE_IDS).filter(id=>id!=='L08'),
     scenarioQualityEnabled: quality.custom_enabled ?? (!(quality.scenario_rules || []).length || (quality.scenario_rules || []).some(rule => rule.enabled !== false)),
@@ -562,14 +565,14 @@ function SceneStep({ form }) {
     <Card className="conversation-config-card" title="对话场景配置">
       <Row gutter={16}>
         <Col span={12}><MarkdownField name="assistantIdentityMarkdown" label="服务（assistant）角色身份说明" description="说明服务方的身份、职责和服务对象。"/></Col>
-        <Col span={12}><MarkdownField name="assistantPermissionMarkdown" label="服务（assistant）角色权限说明" description="说明可以回答和执行的事项，以及不可承诺、不可访问的边界。"/></Col>
+        <Col span={12}><MarkdownField name="assistantPermissionMarkdown" required={false} label="服务（assistant）角色权限说明" description="说明可以回答和执行的事项，以及不可承诺、不可访问的边界。"/></Col>
       </Row>
-      <MarkdownField name="userRoleMarkdown" label="用户（user）角色身份说明" description="说明用户身份、目标、已知信息和自然表达方式。"/>
+      <MarkdownField name="userRoleMarkdown" required={false} label="用户（user）角色身份说明" description="说明用户身份、目标、已知信息和自然表达方式。"/>
       <Divider orientation="left">对话场景</Divider>
       <Row gutter={16}>
         <Col span={24}><MarkdownField name="sceneMarkdown" label="场景说明" description="说明服务对象、业务范围和典型问题。"/></Col>
-        <Col span={24}><MarkdownField name="completionRequirementsMarkdown" label="对话完成要求" description="说明满足哪些条件后可以结束对话，以及结束前必须给出的结果、边界或下一步。"/></Col>
-        <Col span={24}><MarkdownField name="constraintsMarkdown" label="场景约束（包括禁止行为）" description="写清不能编造、不能承诺和必须遵守的业务边界。"/></Col>
+        <Col span={24}><MarkdownField name="completionRequirementsMarkdown" required={false} label="对话完成要求" description="多轮对话建议填写：说明满足哪些条件后可以结束对话，以及结束前必须给出的结果、边界或下一步。"/></Col>
+        <Col span={24}><MarkdownField name="constraintsMarkdown" required={false} label="场景约束（包括禁止行为）" description="写清不能编造、不能承诺和必须遵守的业务边界。"/></Col>
       </Row>
       <Card size="small" className="conversation-config-card" title="其它说明（可选）" extra={<Form.Item name="otherInstructionsEnabled" valuePropName="checked" noStyle><Switch checkedChildren="需要" unCheckedChildren="不需要"/></Form.Item>}>
         {!otherInstructionsEnabled ? <Alert type="info" showIcon message="需要补充但不属于以上字段的信息可写在这里；系统会验证其已进入最终合成指令。"/> : <Form.Item name="otherMarkdown" extra="需要补充但不属于以上字段的信息可写在这里；系统会验证其已进入最终合成指令。" rules={[{ required: true, whitespace: true, message: '请填写其它说明' }]}>
@@ -590,6 +593,23 @@ function SchemaFields({ fieldName, title }) {
       <Col span={2}><Form.Item><Button type="text" danger icon={<DeleteOutlined/>} onClick={() => remove(field.name)}/></Form.Item></Col>
     </Row>) : <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="尚未添加字段"/>}
   </Card>}</Form.List>;
+}
+
+const PLAN_FIELD_TYPES = ['文本', '数值', '布尔', '枚举', '对象', '数组'];
+const SYSTEM_EVENT_FIELD_IDS = ['user_goal', 'participants', 'facts', 'unknowns', 'knowledge_refs', 'interaction_plan', 'tool_plan', 'expected_completion', 'dialogue_brief', 'custom_fields'];
+
+function CustomPlanFieldsEditor() {
+  return <Form.List name="customPlanFields">{(fields, { add, remove }) => <>
+    <Flex justify="space-between" align="center" className="section-title"><Text type="secondary">在系统默认事件结构之上扩展输出字段</Text><Button type="primary" size="small" icon={<PlusOutlined/>} onClick={() => add({ field_id: '', type: '文本', description: '' })}>添加字段</Button></Flex>
+    <Alert type="info" showIcon message="在系统默认事件结构之上扩展输出字段" description="添加的字段将作为 custom_fields 节点注入阶段一输出结构，模型按含义说明逐条构造取值；下方结构定义与两阶段 Prompt 预览会实时更新。采样维度定义的字段（如子场景、用户情绪）自动进入事件计划，无需在此重复声明。"/>
+    {fields.length ? fields.map(field => <Row gutter={8} key={field.key} align="middle" className="section-title">
+      <Col span={6}><Form.Item name={[field.name, 'field_id']} rules={[{ required: true, pattern: /^[A-Za-z][A-Za-z0-9_]*$/, message: '使用英文字母开头的字段 ID' }, { validator: (_, value) => SYSTEM_EVENT_FIELD_IDS.includes(String(value || '').trim()) ? Promise.reject(new Error('该字段为系统默认结构字段，无需在此声明')) : Promise.resolve() }]}><Input placeholder="字段 ID，如 reference_answer"/></Form.Item></Col>
+      <Col span={5}><Form.Item name={[field.name, 'type']} rules={[{ required: true, message: '请选择类型' }]}><Select placeholder="类型" options={PLAN_FIELD_TYPES.map(value => ({ value, label: value }))}/></Form.Item></Col>
+      <Col span={11}><Form.Item name={[field.name, 'description']}><Input placeholder="含义说明与取值约束"/></Form.Item></Col>
+      <Col span={2}><Form.Item><Button type="text" danger icon={<DeleteOutlined/>} onClick={() => remove(field.name)}/></Form.Item></Col>
+    </Row>) : <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="未添加自定义字段；阶段一事件仅包含系统默认结构"/>}
+    {fields.length ? <Text type="secondary">想让某个字段按比例控制分布，请在第 2 步「事件采样维度」中添加维度；那里定义的维度会自动成为计划字段。</Text> : null}
+  </>}</Form.List>;
 }
 
 function ToolCatalogEditor() {
@@ -686,7 +706,7 @@ function KnowledgeToolsStep({ form, onManualChange, readOnly = false }) {
     <SamplerEditor form={form} onManualChange={onManualChange} readOnly={readOnly}/>
     <Alert type="info" showIcon message="知识卡和工具都不是必填项" description="关闭后系统会从合成指令中移除对应要求，并在质检时禁止模型虚构知识引用或工具调用。"/>
     <Card className="conversation-config-card" title={<Space><FileTextOutlined/>知识卡</Space>} extra={<Form.Item name="knowledgeEnabled" valuePropName="checked" noStyle><Switch checkedChildren="已启用" unCheckedChildren="未启用"/></Form.Item>}>
-      {!knowledgeEnabled ? <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="本模板不注入知识卡；仍可继续下一步"/> : <>
+      {!knowledgeEnabled ? <Alert type="info" showIcon message="本模板不注入知识卡；仍可继续下一步"/> : <>
         <Alert type="success" showIcon message="知识卡示例" description={<span>知识卡用于提供模型回答问题时可直接引用的业务知识。每张卡以 <Text code>[知识卡 唯一ID]</Text> 开头，填写适用问题、已知业务事实和推荐回答；多张知识卡可连续粘贴，ID 不可重复。</span>}/>
         <Form.Item className="section-title" name="knowledgeUsageInstructions" label="知识卡使用说明" rules={[{ required: true, whitespace: true, message: '请填写知识卡使用说明' }]} extra="说明何时引用知识卡、如何处理冲突，以及回答时必须遵守的依据边界。">
           <Input.TextArea placeholder="请输入知识卡使用说明" rows={4} showCount onBlur={onManualChange}/>
@@ -697,7 +717,7 @@ function KnowledgeToolsStep({ form, onManualChange, readOnly = false }) {
       </>}
     </Card>
     <Card className="conversation-config-card" title={<Space><ApiOutlined/>工具</Space>} extra={<Form.Item name="toolsEnabled" valuePropName="checked" noStyle><Switch checkedChildren="已启用" unCheckedChildren="未启用"/></Form.Item>}>
-      {!toolsEnabled ? <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="生成纯对话数据，不包含工具调用或工具返回"/> : <>
+      {!toolsEnabled ? <Alert type="info" showIcon message="生成纯对话数据，不包含工具调用或工具返回"/> : <>
         <Alert type="info" showIcon message="工具调用轨迹将保留在训练数据中" description="系统生成 assistant tool_call、模拟 tool 返回和最终回答，用于训练工具调用能力；不会连接真实业务系统。"/>
         <Form.Item name="toolMode" hidden><Input/></Form.Item>
         <ToolCatalogEditor/>
@@ -726,17 +746,24 @@ function QualityRulesEditor({ form, onManualChange,readOnly }) {
 
 function PromptPreviewStep({ form }) {
   const watched = Form.useWatch([], form) || {};
+  const customPlanFields = Form.useWatch('customPlanFields', form) || [];
   const [previewSeed, setPreviewSeed] = useState(20260908);
   const compiledPrompts = useMemo(() => compileConversationPrompts({ ...form.getFieldsValue(true), ...watched }, { seed: previewSeed, language: 'zh-CN', minTurns: 3, maxTurns: 6, referenceTime: '2026-09-08T10:00:00+08:00' }), [form, watched, previewSeed]);
   const ordinaryExample='{"messages":[{"role":"user","content":"我的订单现在到哪里了？"},{"role":"assistant","content":"请提供合成运单号，我来帮您查询。"}]}';
   const toolExample='{"messages":[{"role":"user","content":"请查询运单 SYN2026000001"},{"role":"assistant","content":null,"tool_calls":[{"id":"call_001","type":"function","function":{"name":"query_shipment","arguments":"{\\"shipment_id\\":\\"SYN2026000001\\"}"}}]},{"role":"tool","tool_call_id":"call_001","content":"{\\"status\\":\\"运输中\\"}"},{"role":"assistant","content":"该运单当前正在运输中。"}]}';
   return <>
-    <Card className="conversation-config-card" title="输出数据格式">
-      <Descriptions bordered size="small" column={1} items={[
-        { key:'structure', label:'数据结构', children:'Messages 对话格式' },
-        { key:'description', label:'说明', children:'每条样本包含完整消息序列；发生工具调用时，保留调用参数、工具返回及后续回答。' },
-        { key:'file', label:'文件格式', children:'JSONL（每行一条完整样本）' },
-        { key:'examples', label:'查看示例', children:<Tabs size="small" items={[
+    <Card className="section-title" size="small" title="阶段一输出 JSON 结构定义">
+      <Alert type="info" showIcon message="由编译器生成，只读预览" description="模型实际收到的 event_schema 原始 JSON，随上方自定义输出字段实时更新。采样维度的分配值通过「已分配采样条件」输入事件生成，不在输出结构中重复定义。"/>
+      <pre className="conversation-prompt-preview">{JSON.stringify(compiledPrompts.stageOne.input.event_schema, null, 2)}</pre>
+      <Divider orientation="left">自定义输出字段（可选）</Divider>
+      <CustomPlanFieldsEditor/>
+    </Card>
+    <Card className="section-title" size="small" title="阶段二输出 JSON 结构定义与数据格式">
+      <Alert type="info" showIcon message="模型实际收到的 dialogue_schema 原始 JSON，由编译器生成，只读预览" description="阶段二输出即训练样本内容：dialogue.messages 原样落盘，每条样本一行 JSONL；发生工具调用时保留调用参数、工具返回及后续回答；输入契约无法满足时返回 status=&quot;conflict&quot;。"/>
+      <pre className="conversation-prompt-preview">{JSON.stringify(compiledPrompts.stageTwo.input.dialogue_schema, null, 2)}</pre>
+      <Descriptions className="section-title" bordered size="small" column={1} items={[
+        { key:'file', label:'文件格式', labelStyle:{ width:110 }, children:'JSONL（每行一条完整样本）' },
+        { key:'examples', label:'样本示例', labelStyle:{ width:110 }, children:<Tabs size="small" items={[
           { key:'ordinary', label:'普通对话', children:<pre className="conversation-output-example">{ordinaryExample}</pre> },
           { key:'tool', label:'含工具调用的对话', children:<pre className="conversation-output-example">{toolExample}</pre> },
         ]}/> },

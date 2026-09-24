@@ -106,6 +106,31 @@ export const EVENT_SCHEMA = {
   ],
 };
 
+const CUSTOM_FIELD_JSON_TYPES = { '文本': { type:'string', minLength:1 }, '数值': { type:'number' }, '布尔': { type:'boolean' }, '枚举': { type:'string', minLength:1 }, '对象': { type:'object' }, '数组': { type:'array' } };
+
+export function buildEventSchema(customFields = []) {
+  const fields = (customFields || []).filter(f => f && String(f.field_id || '').trim());
+  if (!fields.length) return EVENT_SCHEMA;
+  const schema = JSON.parse(JSON.stringify(EVENT_SCHEMA));
+  const eventNode = schema.oneOf[0].properties.event;
+  eventNode.properties.custom_fields = {
+    type: 'object',
+    additionalProperties: false,
+    description: '模板声明的自定义输出字段',
+    required: fields.map(f => String(f.field_id).trim()),
+    properties: Object.fromEntries(fields.map(f => [String(f.field_id).trim(), { ...(CUSTOM_FIELD_JSON_TYPES[f.type] || { type:'string', minLength:1 }), description: f.description || '' }])),
+  };
+  eventNode.required.push('custom_fields');
+  return schema;
+}
+
+function customFieldsPromptSection(customFields = []) {
+  const fields = (customFields || []).filter(f => f && String(f.field_id || '').trim());
+  if (!fields.length) return '';
+  const lines = fields.map((f, i) => `${i + 1}. ${String(f.field_id).trim()}（${f.type || '文本'}）：${f.description || '按字段名含义构造'}`).join('\n');
+  return `\n\n七、自定义输出字段\n\n1. event.custom_fields 必须包含以下字段，按各自含义说明构造取值：\n${lines}\n2. 自定义字段不得与系统字段重复表达同一信息；取值不得包含真实个人信息、真实企业或真实账户。\n3. 无法合法构造某个自定义字段时返回冲突，不得省略该字段或编造取值。`;
+}
+
 const dialogueMessageSchema = { oneOf: [
   { type:'object', additionalProperties:false, required:['role','content'], properties:{role:{const:'user'},content:{type:'string',minLength:1}} },
   { type:'object', additionalProperties:false, required:['role','content'], properties:{role:{const:'assistant'},content:{type:'string',minLength:1}} },
@@ -154,16 +179,19 @@ export function compileConversationPrompts(values, preview={}) {
   const toolCatalog=tools.map(tool=>({name:tool.name,description:tool.description,call_condition:tool.call_condition,input_schema:objectSchema(tool.input_fields),mock_return_types:(tool.mock_return_rules||[]).map(rule=>({outcome_type_id:rule.outcome_type_id||slug(`${tool.name}_${rule.return_type}`,'outcome'),name:rule.return_type,response_schema:objectSchema(rule.output_fields),generation_constraint:rule.generation_constraint||'',example_response:parseJson(rule.example_result)||undefined}))}));
   const runtime={language:preview.language||'zh-CN',min_turns:Number(preview.minTurns||3),max_turns:Number(preview.maxTurns||6),reference_time:preview.referenceTime||'2026-09-08T10:00:00+08:00',timezone:'Asia/Shanghai'};
   const references=values.fewShotEnabled?(toolApplicable?[...parseDialogues(values.fewShotToolJsonl),...parseDialogues(values.fewShotDialogueJsonl)]:[...parseDialogues(values.fewShotDialogueJsonl),...(values.knowledgeEnabled?parseDialogues(values.fewShotKnowledgeJsonl):[])]).slice(0,2):[];
-  const stageOneInput={business_config:businessConfig,dimension_definitions:definitions,assignment,knowledge_context:knowledgeContext,tool_catalog:toolCatalog,runtime,event_schema:EVENT_SCHEMA};
+  const customFields=values.customPlanFields||values.custom_plan_fields||[];
+  const eventSchema=buildEventSchema(customFields);
+  const stageOneSystem=STAGE_ONE_SYSTEM_PROMPT+customFieldsPromptSection(customFields);
+  const stageOneInput={business_config:businessConfig,dimension_definitions:definitions,assignment,knowledge_context:knowledgeContext,tool_catalog:toolCatalog,runtime,event_schema:eventSchema};
   const frozenPlaceholder={status:'pending',note:'骨架预览，冻结事件待阶段一生成并通过程序校验',assignment,runtime};
   const stageTwoInput={business_config:businessConfig,frozen_event:frozenPlaceholder,knowledge_context:knowledgeContext,tool_catalog:toolCatalog,reference_dialogues:references,dialogue_schema:DIALOGUE_SCHEMA};
   const knownDimensions=new Set(['子场景','用户身份','用户初始态度','首轮信息完整度','业务异常事件','工具执行结果']);
   const unresolved=dimensions.filter(item=>!knownDimensions.has(item.name)&&(item.applicability_conditions||item.usage_constraints));
   const warnings=unresolved.map(item=>`维度“${item.name}”包含尚未解析的自然语言条件，不能认定为已生效。`);
   const constraint_resolution={status:unresolved.length?'unresolved':'resolved',unresolved_dimension_ids:unresolved.map(item=>item.dimension_id)};
-  const stageOneRequest=makeRequest(STAGE_ONE_SYSTEM_PROMPT,stageOneInput,preview);
+  const stageOneRequest=makeRequest(stageOneSystem,stageOneInput,preview);
   const stageTwoRequest=makeRequest(STAGE_TWO_SYSTEM_PROMPT,stageTwoInput,preview);
-  return {version:PROMPT_COMPILER_VERSION,warnings,constraint_resolution,assignment,stageOne:{input:stageOneInput,system:STAGE_ONE_SYSTEM_PROMPT,user:JSON.stringify(stageOneInput,null,2),request:stageOneRequest},stageTwo:{input:stageTwoInput,system:STAGE_TWO_SYSTEM_PROMPT,user:JSON.stringify(stageTwoInput,null,2),request:stageTwoRequest}};
+  return {version:PROMPT_COMPILER_VERSION,warnings,constraint_resolution,assignment,stageOne:{input:stageOneInput,system:stageOneSystem,user:JSON.stringify(stageOneInput,null,2),request:stageOneRequest},stageTwo:{input:stageTwoInput,system:STAGE_TWO_SYSTEM_PROMPT,user:JSON.stringify(stageTwoInput,null,2),request:stageTwoRequest}};
 }
 
 function validateValue(value,schema,path,errors){
@@ -213,5 +241,5 @@ export function freezeValidatedEvent(result,compiled,options={}){const validatio
 
 export function compileConversationPromptsFromConfiguration(config={}, preview={}) {
   const identity=config.identity||{}; const scenario=config.scenario||{}; const knowledge=config.knowledge||{}; const tools=config.tools||{}; const fewShot=config.few_shot||{};
-  return compileConversationPrompts({businessType:identity.business_type,assistantIdentityMarkdown:scenario.assistant_identity_markdown,assistantPermissionMarkdown:scenario.assistant_permission_markdown,userRoleMarkdown:scenario.user_role_markdown,sceneMarkdown:scenario.scene_markdown,completionRequirementsMarkdown:scenario.completion_requirements_markdown,constraintsMarkdown:scenario.constraints_markdown,otherInstructionsEnabled:scenario.other_instructions_enabled,otherMarkdown:scenario.other_markdown,sampler:config.sampler,knowledgeEnabled:knowledge.enabled,knowledgeUsageInstructions:knowledge.usage_instructions,knowledgeText:knowledge.text,toolsEnabled:tools.enabled,toolCatalog:(tools.catalog||[]).map(tool=>({...tool,example_arguments:JSON.stringify(tool.example_arguments||{}),mock_return_rules:(tool.mock_return_rules||[]).map(rule=>({...rule,example_result:rule.example_result?JSON.stringify(rule.example_result):''}))})),fewShotEnabled:fewShot.enabled,fewShotDialogueJsonl:fewShot.dialogue_jsonl,fewShotKnowledgeJsonl:fewShot.knowledge_jsonl,fewShotToolJsonl:fewShot.tool_jsonl},preview);
+  return compileConversationPrompts({businessType:identity.business_type,assistantIdentityMarkdown:scenario.assistant_identity_markdown,assistantPermissionMarkdown:scenario.assistant_permission_markdown,userRoleMarkdown:scenario.user_role_markdown,sceneMarkdown:scenario.scene_markdown,completionRequirementsMarkdown:scenario.completion_requirements_markdown,constraintsMarkdown:scenario.constraints_markdown,otherInstructionsEnabled:scenario.other_instructions_enabled,otherMarkdown:scenario.other_markdown,sampler:config.sampler,knowledgeEnabled:knowledge.enabled,knowledgeUsageInstructions:knowledge.usage_instructions,knowledgeText:knowledge.text,toolsEnabled:tools.enabled,toolCatalog:(tools.catalog||[]).map(tool=>({...tool,example_arguments:JSON.stringify(tool.example_arguments||{}),mock_return_rules:(tool.mock_return_rules||[]).map(rule=>({...rule,example_result:rule.example_result?JSON.stringify(rule.example_result):''}))})),fewShotEnabled:fewShot.enabled,fewShotDialogueJsonl:fewShot.dialogue_jsonl,fewShotKnowledgeJsonl:fewShot.knowledge_jsonl,fewShotToolJsonl:fewShot.tool_jsonl,customPlanFields:config.custom_plan_fields||[]},preview);
 }
