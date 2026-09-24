@@ -10,7 +10,7 @@ import {templateLabelSnapshot} from './qualityResults.js';
 import { DocumentQualityModelSettings, UnifiedWaybillQualityPanel } from './DocumentWaybillQualityPanels';
 
 const { Title, Text, Paragraph } = Typography;
-const BASE_IMAGE = '/assets/template-mock/orange-waybill-base.png?v=20260913';
+const BASE_IMAGE = `${import.meta.env.BASE_URL}assets/template-mock/orange-waybill-base.png?v=20260924`;
 
 const RAW_FIELDS = [
   ['waybill_no','运单标识','运单号码','Barcode No.'],
