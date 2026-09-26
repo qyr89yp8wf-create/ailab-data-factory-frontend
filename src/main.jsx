@@ -95,6 +95,7 @@ import {templateRulesSnapshot} from './templateQualitySnapshot';
 import LegacyQualityReportPage from './LegacyQualityReportPage';
 import RuleQualityReport from './RuleQualityReport';
 import {reportRuleRows,isDistribution,rateText} from './qualityResults';
+import { DEFAULT_EVENT_DIMENSIONS } from './ColdChainTemplateCenter';
 const { Header, Sider, Content } = Layout;
 const { Title, Text, Paragraph } = Typography;
 const CURRENT_USER = 'feidongni';
@@ -839,7 +840,7 @@ const PUBLISHED_TEMPLATE_PROFILES = [
   { id:'TEMPLATE-DOC-20260902-E3A971', name:'进口货物申报单模板', documentSnapshot:customsTemplateSnapshot, modality:'文档图像', businessType:'报关单', version:'1.0.0', trialStatus:'试运行通过', method:'版面分析法', outputFormat:'PNG + JSON', defaultModel:'Qwen3-VL-8B-Instruct' },
   { id:'TEMPLATE-DOC-20260902-WB0012', name:'橙途速运运单模板', modality:'文档图像', businessType:'运单', version:'1.0.0', trialStatus:'试运行通过', method:'底图生成法', outputFormat:'PNG + JSON', defaultModel:'Qwen3-VL-8B-Instruct', imageModel:'Doubao-Seedream-4.0', backgroundPrompt:'生成一张横版物流运单空白底图：保留规范表格、分区线、浅灰辅助线和右下角二维码占位，不生成任何真实姓名、地址、电话、单号或可识别文字。' },
   { id:'TEMPLATE-CONV-20260902-C01A7B', name:'物流智能客服对话模板', modality:'对话文本', businessType:'智能客服多轮对话', version:'1.0.0', trialStatus:'试运行通过', outputFormat:'messages JSONL', defaultModel:'Qwen3-14B', configuration:{sampler:defaultConversationSampler()} },
-  { id:'TEMPLATE-TS-20260902-CC1024', name:'冷藏集装箱多变量时序模板', modality:'时序数据', businessType:'传感器时序', version:'1.0.0', trialStatus:'试运行通过', outputFormat:'逐样本 JSON', defaultModel:'Qwen3-14B', outputFields:'temperature、humidity、longitude、latitude、event_label' },
+  { id:'TEMPLATE-TS-20260902-CC1024', name:'冷藏集装箱多变量时序模板', modality:'时序数据', businessType:'传感器时序', version:'1.0.0', trialStatus:'试运行通过', outputFormat:'逐样本 JSON', defaultModel:'Qwen3-14B', outputFields:'temperature、humidity、longitude、latitude、event_label', configuration:{ event_generation:{ sampling_dimensions: DEFAULT_EVENT_DIMENSIONS } } },
 ];
 
 const TEMPLATE_QUALITY_RULES = {
@@ -1289,6 +1290,8 @@ function CreateTaskPage({ draft, datasets, onCancel, onSubmit, onSaveDraft }) {
   const coverageGaps=selectedVersion?.qualityReport?.coverageGaps||[];
   const selectedGapKeys=Form.useWatch('coverageGapKeys',form)||[];
   const [expansionTargetConfig,setExpansionTargetConfig]=useState(()=>draft.configSnapshot?.expansionTargetConfig||{});
+  const [expansionErrors,setExpansionErrors]=useState([]);
+  const handleExpansionConfig=cfg=>{setExpansionTargetConfig(cfg);setExpansionErrors(prev=>prev.filter(key=>JSON.stringify(expansionTargetConfig[key]||{})===JSON.stringify(cfg[key]||{})));};
   const expansionSource=String(inputDatasetId)+'/'+inputVersionId+'/'+reportSelectionId;
   const previousExpansionSource=useRef(expansionSource);
   useEffect(()=>{if(previousExpansionSource.current!==expansionSource){form.setFieldValue('coverageGapKeys',[]);form.setFieldValue('labelTargetCount',null);setExpansionTargetConfig({});previousExpansionSource.current=expansionSource;}},[expansionSource,form]);
@@ -1422,8 +1425,8 @@ function CreateTaskPage({ draft, datasets, onCancel, onSubmit, onSaveDraft }) {
     <Form.Item name="coverageGapKeys" hidden><Input/></Form.Item>
     <Radio.Group aria-label="扩增目标来源" value={actualTargetKind} onChange={e=>setExpansionTargetKind(e.target.value)} options={[{value:"规则不通过",label:"规则不通过"},{value:"标签覆盖",label:"标签分布不足"}]} optionType="button"/>
     <ExpansionEvidence report={selectedReport} target={expansionEvidence} onClose={()=>setExpansionEvidence(null)}/>
-    <ExpansionTargetTable rows={visibleExpansionTargets} selected={selectedGapKeys} onSelect={keys=>form.setFieldValue("coverageGapKeys",keys)} config={expansionTargetConfig} onConfig={setExpansionTargetConfig} onEvidence={setExpansionEvidence} report={selectedReport}/>
-    <div className="expansion-total"><Text type="secondary">计划新增合计</Text><Text strong>{expansionEstimate.toLocaleString()} 条</Text><Text type="secondary">按已选目标与自定义配置数量相加，各目标分别生成。</Text></div>
+    <ExpansionTargetTable rows={visibleExpansionTargets} selected={selectedGapKeys} onSelect={keys=>form.setFieldValue("coverageGapKeys",keys)} config={expansionTargetConfig} onConfig={handleExpansionConfig} onEvidence={setExpansionEvidence} report={selectedReport} errors={expansionErrors}/>
+    <div className="expansion-total"><Text type="secondary">已选目标 {(selectedGapKeys.length+(customExpansionEnabled?customExpansionSettings.length:0)).toLocaleString()} 个 / 计划新增</Text><Text strong>{expansionEstimate.toLocaleString()} 条</Text><Text type="secondary">按各目标生成计划相加，不代表源样本去重数；来源重叠的目标各自独立生成新样本；未完成的行不作为有效提交项。</Text></div>
     <Flex justify="space-between" align="center" className="form-switch-line"><div><Text strong>自定义扩增设置</Text><div><Text type="secondary">可添加多组目标标签或低质项、数量、指令和独立模型配置</Text></div></div><Form.Item name="customExpansionEnabled" valuePropName="checked" noStyle><Switch/></Form.Item></Flex>{customExpansionEnabled&&<Form.List name="customExpansionSettings">{(fields,{add,remove})=><Space direction="vertical" size={12} style={{width:'100%'}}>{fields.map((field,index)=><Card key={field.key} size="small" title={`自定义设置 ${index+1}`} extra={<Button type="text" danger icon={<DeleteOutlined/>} onClick={()=>remove(field.name)}>删除</Button>}><Row gutter={16}><Col span={6}><Form.Item name={[field.name,'name']} label="设置名称" rules={[{required:true}]}><Input placeholder="请输入设置名称"/></Form.Item></Col><Col span={8}><Form.Item name={[field.name,'labels']} label="扩增目标组合" rules={[{required:true}]}><Select placeholder="请选择扩增目标组合" mode="multiple" options={expansionTargetRows.map(item=>({value:item.key,label:`${item.kind} · ${item.dimension} · ${item.label}`}))}/></Form.Item></Col><Col span={4}><Form.Item name={[field.name,'count']} label="目标数量" rules={[{required:true}]}><InputNumber placeholder="请输入目标数量（不小于 1）" min={1} style={{width:'100%'}}/></Form.Item></Col></Row><Form.Item name={[field.name,'prompt']} label="扩增指令" rules={[{required:true}]}><Input.TextArea placeholder="描述扩增指令，说明目标、约束和输出要求" rows={3}/></Form.Item><ModelConfigField model={<Form.Item name={[field.name,'model']} label={draft.modality==='文档图像'?'图像生成模型':'生成模型'} rules={[{required:true},{validator:(_,value)=>expansionModels(draft.modality).includes(value)?Promise.resolve():Promise.reject(new Error('请选择适用于当前数据类型的生成模型'))}]}><Select placeholder="请选择选项" options={expansionModels(draft.modality).map(value=>({value,label:value}))}/></Form.Item>} parameters={<Form.Item name={[field.name,'parameters']}  rules={[{validator:(_,value)=>{if(!value)return Promise.resolve();try{JSON.parse(value);return Promise.resolve();}catch{return Promise.reject(new Error('请输入合法 JSON'));}}}]}><Input.TextArea rows={3} className="json-textarea" placeholder={'{\n  "temperature": 0.8\n}'}/></Form.Item>}/></Card>)}<Button type="dashed" block icon={<PlusOutlined/>} onClick={()=>add({model:defaultExpansionModel(draft.modality),parameters:'{\n  "temperature": 0.8\n}'})}>新增自定义扩增设置</Button></Space>}</Form.List>}
     <ModelWithParameters form={form} modelName="expansionModel" parameterSwitchName="expansionParametersEnabled" parameterName="expansionParameters" models={expansionModels(draft.modality)} label={draft.modality==='文档图像'?'图像生成模型':'生成模型'}/>
     <Divider orientation="left">结果写入</Divider><Form.Item name="targetDataset" label="目标数据集"><Input disabled/></Form.Item><Form.Item name="versionNote" label="扩增版本描述" rules={[{required:true}]}><Input placeholder="请输入扩增版本描述"/></Form.Item><Alert type="success" showIcon message="任务完成后创建 1 个扩增版本" description="开启自动复检时，标签与报告写入同一版本。"/>
@@ -1439,7 +1442,17 @@ function CreateTaskPage({ draft, datasets, onCancel, onSubmit, onSaveDraft }) {
       if(isAugmentation&&(!Number.isInteger(values.targetCount)||values.targetCount<1))throw new Error('目标增强样本数必须为正整数');
       if(isExpansion&&(!expansionModels(draft.modality).includes(values.expansionModel)||(values.customExpansionEnabled&&(values.customExpansionSettings||[]).some(item=>!expansionModels(draft.modality).includes(item.model)))))throw new Error('请选择适用于当前数据类型的生成模型');
       if(isExpansion&&!selectedGapKeys.length&&!customExpansionTotal)throw new Error('请选择至少一项扩增目标或填写自定义目标');
-      if(isExpansion){validateExpansionPlan(expansionTargetRows,selectedGapKeys,expansionTargetConfig,customExpansionEnabled?customExpansionSettings:[]);values.expansionTargets=expansionTargetRows.filter(r=>selectedGapKeys.includes(r.key)).map(r=>({...r,plannedCount:suggestedGapFor(r),plannedPercent:r.baseCount?(targetConfigFor(r).percent??suggestedGapFor(r)/r.baseCount*100):null,percentageBase:r.baseCount,quantityScope:'checked'}));}
+      if(isExpansion){
+        const invalidExpansionRows=expansionTargetRows.filter(r=>selectedGapKeys.includes(r.key)).filter(r=>{const n=expansionCount(r,targetConfigFor(r));return !Number.isSafeInteger(n)||n<1;});
+        if(invalidExpansionRows.length){
+          setExpansionErrors(invalidExpansionRows.map(r=>r.key));
+          const first=invalidExpansionRows[0];
+          message.error(`「${first.label}」的计划新增数量须为正整数，请完成后重新提交`);
+          setTimeout(()=>{const el=document.querySelector(`[data-row-key="${first.key}"]`);el?.scrollIntoView({behavior:'smooth',block:'center'});},60);
+          return;
+        }
+        setExpansionErrors([]);
+        validateExpansionPlan(expansionTargetRows,selectedGapKeys,expansionTargetConfig,customExpansionEnabled?customExpansionSettings:[]);values.expansionTargets=expansionTargetRows.filter(r=>selectedGapKeys.includes(r.key)).map(r=>({...r,plannedCount:suggestedGapFor(r),plannedPercent:r.baseCount?(targetConfigFor(r).percent??suggestedGapFor(r)/r.baseCount*100):null,percentageBase:r.baseCount,quantityScope:'checked'}));}
       if(isSynthesis&&draft.modality==='对话文本'){
         if(conversationSampler.dimensions?.length){
           if(conversationSampler.dimensions.some(item=>!item?.name?.trim()||!(item.values||[]).length))throw new Error('模板中的事件采样维度配置不完整');

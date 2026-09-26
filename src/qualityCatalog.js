@@ -5,9 +5,9 @@ const clone=x=>JSON.parse(JSON.stringify(x));
 const groups={S:'隐私质检',A:'安全质检',B:'文本基础质量',D:'文档基础质检',T:'时序结构与数值',L:'正文与回答质量'};
 const CONVERSATION_CLASSIFICATION='conversation-v3';
 const conversationIds={L21:'L01',L01:'L02',L02:'L03',L03:'L04',L04:'L05',L05:'L06',L06:'L07',L07:'L08',L22:'L09',L13:'L10',L14:'L11',L15:'L12',L23:'L13',L08:'L14',L09:'L15',L10:'L16',L11:'L17',L12:'L18',L16:'L19',L17:'L20',L18:'L21',L19:'L22',L20:'L23',L24:'L24',L25:'L25',L26:'L26'};
-const conversationCategory=id=>{const n=Number(id.slice(1));return n<=9?'正文与回答质量':n<=13?'指令匹配度与事件一致性':n<=18?'事件与工具对话一致性检查':n<=23?'特定内容与字典比对（按模板启用）':n===25?'标签分类':'用户自定义规则';};
+const conversationCategory=id=>{const n=Number(id.slice(1));return n<=9?'正文与回答质量':n<=13?'指令匹配度与事件一致性':n<=18?'事件与工具对话一致性检查':n<=23?'特定内容与字典比对（按模板启用）':(n===25||n===27)?'标签分类':'用户自定义规则';};
 export const RULE_CATALOG=data.map(source=>{
- const r=source.id[0]==='L'?{...source,id:conversationIds[source.id],rule_id:conversationIds[source.id]}:source;
+ const r=source.id[0]==='L'?{...source,id:conversationIds[source.id]||source.id,rule_id:conversationIds[source.id]||source.id}:source;
  const n=Number(r.id.slice(1)),p=r.id[0];let category=groups[p];
  if(p==='L')category=conversationCategory(r.id);
  if(p==='T')category=n<=7?'时序结构与数值':n===10?'标签分类':n<=11?'指令匹配度与事件一致性':'用户自定义规则';

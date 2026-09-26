@@ -88,7 +88,7 @@ const COVERAGE_DIMENSIONS = [
   {dimension_id:'temporal_pattern',name:'时序形态',labels:TEMPORAL_PATTERN_OPTIONS.map(item=>({value:item.value,name:item.label}))},
 ];
 const DEFAULT_COVERAGE_LABELS = EVENT_OPTIONS.map(item=>`${item.value} | ${item.label}`).join('\n');
-const DEFAULT_EVENT_DIMENSIONS = [
+export const DEFAULT_EVENT_DIMENSIONS = [
   {dimension_id:'dim_event_type',name:'事件类型',values:['正常运行','开门','短时断电','制冷能力下降','传感器偏移','初始热负载','气流受阻','船期延误'],option_ids:{'正常运行':'opt_event_normal','开门':'opt_event_door','短时断电':'opt_event_power','制冷能力下降':'opt_event_cooling','传感器偏移':'opt_event_sensor','初始热负载':'opt_event_warm_load','气流受阻':'opt_event_airflow','船期延误':'opt_event_vessel_delay'},description:'本条样本需要体现的主要运行事件',applicability_conditions:'所有样本',prohibited_conditions:''},
   {dimension_id:'dim_operation_stage',name:'运行阶段',values:['公路运输','港口等待','海运'],option_ids:{'公路运输':'opt_stage_road','港口等待':'opt_stage_port','海运':'opt_stage_ocean'},description:'本条样本所处或重点覆盖的运输运行阶段',applicability_conditions:'所有样本',prohibited_conditions:''},
   {dimension_id:'dim_cargo_type',name:'货物类型',values:['冷藏货物'],option_ids:{'冷藏货物':'opt_cargo_chilled'},description:'按模板业务定义参与采样的货物类别',applicability_conditions:'所有样本',prohibited_conditions:''},
