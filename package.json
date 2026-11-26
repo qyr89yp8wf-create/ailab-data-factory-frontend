@@ -1,13 +1,13 @@
 {
-  "name": "data-factory-user-portal-v5",
-  "version": "5.3.0",
+  "name": "data-factory-user-portal-v5-5",
+  "version": "5.5.0",
   "private": true,
   "type": "module",
   "scripts": {
-    "dev": "vite --host 127.0.0.1 --port 8769",
+    "dev": "vite --host 127.0.0.1 --port 8775",
     "build": "vite build",
     "test": "node scripts/run-tests.mjs",
-    "preview": "vite preview --host 127.0.0.1 --port 8769"
+    "preview": "vite preview --host 127.0.0.1 --port 8775"
   },
   "dependencies": {
     "@ant-design/icons": "latest",

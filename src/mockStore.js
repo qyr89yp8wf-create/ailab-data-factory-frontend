@@ -1,7 +1,7 @@
 import {encodeStore,decodeStore} from './storageCodec.js';
 import { nowDateTime } from './timeUtils';
 
-const PREFIX = 'data-factory-frontend-v3:';
+const PREFIX = 'data-factory-frontend-v5.5:';
 
 export const wait = (ms = 120) => new Promise(resolve => window.setTimeout(resolve, ms));
 export const clone = value => value == null ? value : structuredClone(value);

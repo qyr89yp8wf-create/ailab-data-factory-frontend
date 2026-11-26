@@ -1,5 +1,7 @@
+import { validateValueMode } from './timeSeriesValueModes.js';
 import {FormQualityEditor} from './UnifiedQualityEditor';
 import {qualityConfig} from './qualityCatalog';
+import {setLeaveDirty} from './leaveGuard';
 import {FormModelConfig,ModelConfigField,ModelConfigGroup} from './ModelConfigField';
 import PrivacyPolicyEditor,{validatePrivacyPolicy,privacyFieldOptions} from './PrivacyPolicyEditor';
 import React, { useEffect, useMemo, useState } from 'react';
@@ -13,7 +15,7 @@ import {
   DownloadOutlined, LeftOutlined, PlusOutlined, ReloadOutlined, SafetyCertificateOutlined, SaveOutlined,
 } from '@ant-design/icons';
 import { coldchainApi } from './coldchainApi';
-import { COLDCHAIN_MODEL_CONFIGURATION, COLDCHAIN_MODEL_EVENTS } from './timeSeriesModelSeed';
+import { COLDCHAIN_MODEL_CONFIGURATION, COLDCHAIN_MODEL_EVENTS, COLDCHAIN_MODEL_FIELDS } from './timeSeriesModelSeed';
 import { compileStage1, compileStage2, DEMO_FROZEN_EVENT, PREVIEW_RUNTIME, samplePreviewAssignment, STAGE2_SYSTEM } from './timeSeriesPromptCompiler';
 import { formatDateTime, nowDateTime } from './timeUtils';
 import { COLD_CHAIN_PARAMETER_OPTIONS } from './ColdChainMvp';
@@ -147,7 +149,7 @@ function EventCandidatesEditor({ form }) {
         <Form.Item name={[field.name,'event_id']} hidden><Input/></Form.Item><Form.Item name={[field.name,'custom']} hidden valuePropName="checked"><Checkbox/></Form.Item>{!item.custom&&<Form.Item name={[field.name,'name']} hidden><Input/></Form.Item>}
         {!selected?<Text type="secondary">未选择时，该异常事件及其 Prompt 不会进入模板。</Text>:<>
           {item.custom&&<Form.Item name={[field.name,'name']} label="异常事件名称" rules={[{required:true,whitespace:true,message:'请输入异常事件名称'}]}><Input placeholder="例如：压缩机频繁启停"/></Form.Item>}
-          <Form.Item name={[field.name,'prompt']} label="事件描述 Prompt" rules={[{required:true,whitespace:true,message:'请填写事件描述 Prompt'}]}><Input.TextArea rows={5} placeholder="说明事件的发生阶段、持续时间、变化过程以及与其它参数的关系"/></Form.Item>
+          <Form.Item name={[field.name,'prompt']} label="事件描述 Prompt" rules={[{required:true,whitespace:true,message:'请填写事件描述 Prompt'}]}><Input.TextArea rows={5} placeholder="说明事件的发生阶段、持续时间、变化过程以及与其它参数的关系" allowClear/></Form.Item>
         </>}
       </Card></Col>;
     })}</Row>
@@ -160,22 +162,22 @@ function EventSamplingDimensionsEditor({ form }) {
   const [advancedIndex,setAdvancedIndex]=useState(null);
   const advanced=advancedIndex==null?null:dimensions[advancedIndex];
   return <>
-    <Alert type="info" showIcon message="定义事件的可采样空间" description="每个维度至少维护一个枚举值；选项占比在创建合成任务时配置。系统提供的示例维度也可以删除或改名。"/>
     <Form.List name="eventDimensions" rules={[{validator:(_,items)=>items?.length?Promise.resolve():Promise.reject(new Error('请至少配置一个事件采样维度'))}]}>{(fields,{add,remove},{errors})=><><div className="template-section-heading"><strong>事件采样维度</strong><Button type="primary" icon={<PlusOutlined/>} onClick={()=>add({dimension_id:stableConfigId('dim'),option_ids:{},name:'',values:[],description:'',applicability_conditions:'',prohibited_conditions:''})}>新增维度</Button></div>
-      <Table className="section-title" rowKey="key" pagination={false} dataSource={fields} columns={[
+    <Alert type="info" showIcon message="定义事件的可采样空间" description="每个维度至少维护一个枚举值；选项占比在创建合成任务时配置。系统提供的示例维度也可以删除或改名。"/>
+      <Table rowKey="key" pagination={false} dataSource={fields} columns={[
         {title:'维度名称',width:'25%',render:(_,field,index)=><Form.Item name={[field.name,'name']} rules={[{required:true,whitespace:true,message:'请输入维度名称'}]}><Input disabled={index===0} placeholder="例如：运行阶段" suffix={index===0?<Tag>系统必填</Tag>:null}/></Form.Item>},
         {title:'维度可选值',render:(_,field)=><Form.Item name={[field.name,'values']} rules={[{validator:(_,values)=>Array.isArray(values)&&values.filter(value=>String(value||'').trim()).length>=1?Promise.resolve():Promise.reject(new Error('至少维护 1 个枚举值'))}]}><Select mode="tags" tokenSeparators={[',','，']} placeholder="输入枚举值后按回车"/></Form.Item>},
         {title:'高级配置（可选）',width:150,render:(_,field,index)=><Button onClick={()=>setAdvancedIndex(index)}>配置</Button>},
-        {title:'操作',width:80,render:(_,field,index)=>index===0?<Text type="secondary">不可删除</Text>:<Button type="text" danger icon={<DeleteOutlined/>} aria-label="删除维度" onClick={()=>remove(field.name)}/>},
+        {title:'操作',width:80,render:(_,field,index)=>index===0?<Button type="text" disabled icon={<DeleteOutlined/>} aria-label="删除维度" title="系统必填维度不可删除"/>:<Button type="text" danger icon={<DeleteOutlined/>} aria-label="删除维度" onClick={()=>remove(field.name)}/>},
       ]}/>
       <Form.ErrorList errors={errors}/>
       
     </>}</Form.List>
     <Modal title={`高级配置${advanced?.name?`：${advanced.name}`:''}`} open={advancedIndex!=null} onCancel={()=>setAdvancedIndex(null)} onOk={()=>setAdvancedIndex(null)} okText="完成" cancelText="取消" destroyOnHidden>
       {advancedIndex!=null&&<>
-        <Form.Item name={['eventDimensions',advancedIndex,'description']} label="维度说明"><Input.TextArea rows={3} placeholder="说明这个维度表示什么"/></Form.Item>
-        <Form.Item name={['eventDimensions',advancedIndex,'applicability_conditions']} label="适用条件"><Input.TextArea rows={3} placeholder="什么情况下参与采样；没有限制可留空"/></Form.Item>
-        <Form.Item name={['eventDimensions',advancedIndex,'prohibited_conditions']} label="禁止条件"><Input.TextArea rows={3} placeholder="填写不能出现的取值或组合；没有限制可留空"/></Form.Item>
+        <Form.Item name={['eventDimensions',advancedIndex,'description']} label="维度说明"><Input.TextArea rows={3} placeholder="说明这个维度表示什么" allowClear/></Form.Item>
+        <Form.Item name={['eventDimensions',advancedIndex,'applicability_conditions']} label="适用条件"><Input.TextArea rows={3} placeholder="什么情况下参与采样；没有限制可留空" allowClear/></Form.Item>
+        <Form.Item name={['eventDimensions',advancedIndex,'prohibited_conditions']} label="禁止条件"><Input.TextArea rows={3} placeholder="填写不能出现的取值或组合；没有限制可留空" allowClear/></Form.Item>
       </>}
     </Modal>
   </>;
@@ -223,15 +225,15 @@ function EventDefinitionsEditor({ form }) {
     <Alert type="info" showIcon message="事件定义与上方“事件类型”枚举自动同步" description="新增、改名或删除事件类型后，这里会同步生成对应配置；事件描述与定义为必填。"/>
     <Form.List name="eventDefinitions">{fields=><Table className="section-title" rowKey="key" pagination={false} dataSource={fields} columns={[
       {title:'事件类型',width:180,render:(_,field,index)=><><Form.Item name={[field.name,'event_id']} hidden><Input/></Form.Item><Form.Item name={[field.name,'name']}><Input disabled value={definitions[index]?.name}/></Form.Item></>},
-      {title:'事件描述与定义',render:(_,field)=><Form.Item name={[field.name,'description_definition']} rules={[{required:true,whitespace:true,message:'请填写事件描述与定义'}]}><Input.TextArea rows={3} placeholder="说明事件是什么、怎样发生，以及主要变化过程"/></Form.Item>},
+      {title:'事件描述与定义',render:(_,field)=><Form.Item name={[field.name,'description_definition']} rules={[{required:true,whitespace:true,message:'请填写事件描述与定义'}]}><Input.TextArea rows={3} placeholder="说明事件是什么、怎样发生，以及主要变化过程" allowClear/></Form.Item>},
       {title:'高级配置',width:150,render:(_,field,index)=><Button onClick={()=>setAdvancedIndex(index)}>配置</Button>},
     ]}/>}</Form.List>
     <Modal title={`事件高级配置${advanced?.name?`：${advanced.name}`:''}`} open={advancedIndex!=null} onCancel={()=>setAdvancedIndex(null)} onOk={()=>setAdvancedIndex(null)} okText="完成" cancelText="取消" destroyOnHidden>
       {advancedIndex!=null&&<>
-        <Form.Item name={['eventDefinitions',advancedIndex,'impact_targets']} label="影响对象" rules={[{required:true,whitespace:true,message:'请填写影响对象'}]} extra="作用于设备、传感器或其它对象。"><Input.TextArea rows={3} placeholder="例如：制冷设备、温度传感器、箱内空气"/></Form.Item>
+        <Form.Item name={['eventDefinitions',advancedIndex,'impact_targets']} label="影响对象" rules={[{required:true,whitespace:true,message:'请填写影响对象'}]} extra="作用于设备、传感器或其它对象。"><Input.TextArea rows={3} placeholder="例如：制冷设备、温度传感器、箱内空气" allowClear/></Form.Item>
         <Form.Item name={['eventDefinitions',advancedIndex,'duration_range']} label="持续时间范围" rules={[{required:true,whitespace:true,message:'请填写持续时间范围'}]} extra="请明确数值范围和单位。"><Input placeholder="例如：5～15分钟"/></Form.Item>
-        <Form.Item name={['eventDefinitions',advancedIndex,'intensity_parameters']} label="强度参数（可选）"><Input.TextArea rows={3} placeholder="例如：传感器偏移量及范围"/></Form.Item>
-        <Form.Item name={['eventDefinitions',advancedIndex,'occurrence_conditions']} label="发生条件" rules={[{required:true,whitespace:true,message:'请填写发生条件'}]} extra="说明允许在哪些阶段或状态下发生。"><Input.TextArea rows={3} placeholder="例如：海运阶段且制冷设备运行中"/></Form.Item>
+        <Form.Item name={['eventDefinitions',advancedIndex,'intensity_parameters']} label="强度参数（可选）"><Input.TextArea rows={3} placeholder="例如：传感器偏移量及范围" allowClear/></Form.Item>
+        <Form.Item name={['eventDefinitions',advancedIndex,'occurrence_conditions']} label="发生条件" rules={[{required:true,whitespace:true,message:'请填写发生条件'}]} extra="说明允许在哪些阶段或状态下发生。"><Input.TextArea rows={3} placeholder="例如：海运阶段且制冷设备运行中" allowClear/></Form.Item>
       </>}
     </Modal>
   </>;
@@ -240,6 +242,7 @@ function EventDefinitionsEditor({ form }) {
 function FieldRuleEditor({ fieldIndex }) {
   const form=Form.useFormInstance();
   const type=Form.useWatch(['fields',fieldIndex,'type'],form);
+  const mode=Form.useWatch(['fields',fieldIndex,'value_mode'],form)||'dynamic';
   return <div className="coldchain-field-editor-flat">
       <Row gutter={16}>
         <Col span={6}><Form.Item name={[fieldIndex,'label']} label="字段名称" rules={[{required:true,whitespace:true}]}><Input placeholder="例如：回风温度"/></Form.Item></Col>
@@ -248,16 +251,21 @@ function FieldRuleEditor({ fieldIndex }) {
         <Col span={6}><Form.Item name={[fieldIndex,'unit']} label="单位" rules={[{max:40}]}><Input placeholder="例如：℃、%、km/h"/></Form.Item></Col>
       </Row>
       <Row gutter={16} align="bottom"><Col span={10}><Form.Item name={[fieldIndex,'enum_values']} label="枚举值（可选）" extra="离散字段维护允许值；输入后按回车。"><Select mode="tags" tokenSeparators={[',','，']} placeholder="例如：road、port、sea"/></Form.Item></Col><Col span={5}><Form.Item name={[fieldIndex,'nullable']} label="允许缺失" valuePropName="checked"><Switch checkedChildren="允许" unCheckedChildren="不允许"/></Form.Item></Col>{['number','integer'].includes(type)&&<><Col span={4}><Form.Item name={[fieldIndex,'value_schema','minimum']} label="全局最小值"><InputNumber placeholder="请输入全局最小值" style={{width:'100%'}}/></Form.Item></Col><Col span={4}><Form.Item name={[fieldIndex,'value_schema','maximum']} label="全局最大值"><InputNumber placeholder="请输入全局最大值" style={{width:'100%'}}/></Form.Item></Col></>}</Row>
+      <Form.Item name={[fieldIndex,'value_mode']} label="取值方式" initialValue="dynamic"><Select options={[{value:'dynamic',label:'随时间变化'},{value:'fixed',label:'固定值'},{value:'per_series',label:'每段随机取值',disabled:!['number','integer'].includes(type)}]}/></Form.Item>
+      {mode==='fixed'&&<Form.Item name={[fieldIndex,'fixed_value']} label="固定值" rules={[{required:true,message:'请填写固定值'}]} extra="所有时序的所有时间点使用同一个值，由程序填充。">{['number','integer'].includes(type)?<InputNumber precision={type==='integer'?0:undefined}/>:<Input/>}</Form.Item>}
+      {mode==='per_series'&&<Row gutter={16}><Col span={12}><Form.Item name={[fieldIndex,'range_min']} label="范围下限" rules={[{required:true}]}><InputNumber precision={type==='integer'?0:undefined}/></Form.Item></Col><Col span={12}><Form.Item name={[fieldIndex,'range_max']} label="范围上限" rules={[{required:true}]} extra="每段时序抽取一次，整段保持不变，由程序填充。"><InputNumber precision={type==='integer'?0:undefined}/></Form.Item></Col></Row>}
+      {mode==='dynamic'&&<>
       <Divider orientation="left">字段生成 Prompt</Divider>
-      <Form.Item name={[fieldIndex,'overall_change_rules']} label="整体变化规则" rules={[{required:true,whitespace:true,message:'请填写整体变化规则'}]} extra="填写初始值、取值范围、正常趋势、周期和日常波动。"><Input.TextArea rows={4} placeholder="初始4～6℃；正常时围绕4℃小幅波动"/></Form.Item>
-      <Form.Item name={[fieldIndex,'stage_event_rules']} label="阶段、事件与关键时点规则（可选）" extra="填写特定区间内如何变化、结束后如何恢复，或某时点的要求。"><Input.TextArea rows={3} placeholder="开门期间向环境温度靠近；关门后逐渐恢复"/></Form.Item>
-      <Form.Item name={[fieldIndex,'relations_special_constraints']} label="关联与特殊约束（可选）" extra="填写与其他字段的关系、响应延迟，以及特有的噪声、偏移或缺失要求。"><Input.TextArea rows={3} placeholder="使用同一时刻的环境温度；断网期间读数缺失，不填为0"/></Form.Item>
+      <Form.Item name={[fieldIndex,'overall_change_rules']} label="整体变化规则" rules={[{required:true,whitespace:true,message:'请填写整体变化规则'}]} extra="填写初始值、取值范围、正常趋势、周期和日常波动。"><Input.TextArea rows={4} placeholder="初始4～6℃；正常时围绕4℃小幅波动" allowClear/></Form.Item>
+      <Form.Item name={[fieldIndex,'stage_event_rules']} label="阶段、事件与关键时点规则（可选）" extra="填写特定区间内如何变化、结束后如何恢复，或某时点的要求。"><Input.TextArea rows={3} placeholder="开门期间向环境温度靠近；关门后逐渐恢复" allowClear/></Form.Item>
+      <Form.Item name={[fieldIndex,'relations_special_constraints']} label="关联与特殊约束（可选）" extra="填写与其他字段的关系、响应延迟，以及特有的噪声、偏移或缺失要求。"><Input.TextArea rows={3} placeholder="使用同一时刻的环境温度；断网期间读数缺失，不填为0" allowClear/></Form.Item>
+      </>}
   </div>;
 }
 
 const ENGINE_CATALOG=[
-  {value:'coldchain_physics_v1',label:'冷链物理时序引擎 v1',fields:COLD_CHAIN_PARAMETER_OPTIONS.map(item=>item.value),events:EVENT_OPTIONS.map(item=>item.value)},
-  {value:'generic_timeseries_engine_v1',label:'通用时序规则引擎 v1',fields:['value','status','latitude','longitude','timestamp'],events:['normal','anomaly','interruption','sensor_error']},
+  {value:'coldchain_physics_v1',label:'冷链物理时序引擎 v1（仅示例）',fields:COLDCHAIN_MODEL_FIELDS.map(item=>item.field_id),events:EVENT_OPTIONS.map(item=>item.value)},
+  {value:'generic_timeseries_engine_v1',label:'通用时序规则引擎 v1（仅示例）',fields:['value','status','latitude','longitude','timestamp'],events:['normal','anomaly','interruption','sensor_error']},
 ];
 
 function GenerationMethodSelector({ form }) {
@@ -281,7 +289,7 @@ function EngineGenerationEditor({ form }) {
   const overrides=Array.isArray(advancedValue)?advancedValue.filter(Boolean):[];
   const [advancedEvent,setAdvancedEvent]=useState(null);
   const engine=ENGINE_CATALOG.find(item=>item.value===engineId)||ENGINE_CATALOG[0];
-  const fieldRows=engine.fields.map(name=>({english_name:name,chinese_name:COLD_CHAIN_PARAMETER_OPTIONS.find(item=>item.value===name)?.label||({value:'数值',status:'状态',latitude:'纬度',longitude:'经度',timestamp:'时间戳'}[name]||name),generation_rule:ENGINE_FIELD_RULES[name]||'由引擎规则生成'}));
+  const fieldRows=engine.fields.map(name=>({english_name:name,chinese_name:COLDCHAIN_MODEL_FIELDS.find(item=>item.field_id===name)?.label||COLD_CHAIN_PARAMETER_OPTIONS.find(item=>item.value===name)?.label||({value:'数值',status:'状态',latitude:'纬度',longitude:'经度',timestamp:'时间戳'}[name]||name),generation_rule:({temperature_setpoint:'固定值，由程序填充，整段保持不变',ambient_temperature:'每段在配置范围内抽取一次，整段保持不变',return_air_temperature:'根据环境、制冷和负载计算真实箱温',return_air_temperature_observed:'在真实箱温上叠加传感器偏差与噪声'})[name]||ENGINE_FIELD_RULES[name]||'由引擎规则生成'}));
   const eventRows=engine.events.map(name=>({english_name:name,chinese_name:EVENT_OPTIONS.find(item=>item.value===name)?.label||({anomaly:'异常',interruption:'中断',sensor_error:'传感器异常'}[name]||name),generation_rule:DEFAULT_EVENT_DEFINITION_TEXT[EVENT_OPTIONS.find(item=>item.value===name)?.label]||'由引擎按内置事件规则生成'}));
   const toggle=(field,value,checked)=>form.setFieldValue(field,checked?[...new Set([...(field==='engineSelectedFields'?selectedFields:selectedEvents),value])]:(field==='engineSelectedFields'?selectedFields:selectedEvents).filter(item=>item!==value));
   const currentOverride=overrides.find(item=>item.event_id===advancedEvent);
@@ -299,9 +307,10 @@ function EngineGenerationEditor({ form }) {
     <Table rowKey="english_name" pagination={false} dataSource={fieldRows} columns={[
       {title:'中文名',dataIndex:'chinese_name'},{title:'英文名',dataIndex:'english_name',render:value=><Text code>{value}</Text>},{title:'生成规则',dataIndex:'generation_rule'},{title:'操作',width:80,render:(_,row)=><Checkbox checked={selectedFields.includes(row.english_name)} onChange={event=>toggle('engineSelectedFields',row.english_name,event.target.checked)}/>} ]}/>
     <Modal title={`事件高级配置：${eventRows.find(item=>item.english_name===advancedEvent)?.chinese_name||''}`} open={Boolean(advancedEvent)} onCancel={()=>setAdvancedEvent(null)} onOk={()=>setAdvancedEvent(null)} okText="完成" cancelText="取消">
-      <Form.Item label="允许发生阶段" required><Input.TextArea placeholder="请输入允许发生阶段" rows={3} value={currentOverride?.allowed_stages||''} onChange={event=>updateOverride('allowed_stages',event.target.value)}/></Form.Item>
+      <Form.Item label="允许发生阶段" required><Input.TextArea placeholder="请输入允许发生阶段" rows={3} value={currentOverride?.allowed_stages||''} onChange={event=>updateOverride('allowed_stages',event.target.value)} allowClear/></Form.Item>
       <Form.Item label="持续时间" required><Input value={currentOverride?.duration||''} onChange={event=>updateOverride('duration',event.target.value)} placeholder="例如：5～15分钟"/></Form.Item>
-      <Form.Item label="影响字段" required><Select placeholder="请选择影响字段" mode="multiple" value={String(currentOverride?.affected_fields||'').split(/[,，、]/).filter(Boolean)} options={engine.fields.map(value=>({value,label:value}))} onChange={value=>updateOverride('affected_fields',value.join(','))}/></Form.Item>
+      <Form.Item label="事件强度" extra="选填，可描述具体数值或范围；不涉及强度的事件可留空，使用引擎默认值。"><Input.TextArea rows={3} value={currentOverride?.intensity||''} onChange={event=>updateOverride('intensity',event.target.value)} placeholder="例如：制冷能力下降至正常的30%～60%；传感器读数偏移+0.5～+1.5℃。请填写当前事件的强度要求。" allowClear/></Form.Item>
+      <Form.Item label="影响字段"><Flex gap={8} wrap>{String(currentOverride?.affected_fields||'').split(/[,，、]/).filter(Boolean).map(value=><Tag key={value} bordered={false} style={{margin:0,background:'#f5f5f5',color:'#595959',padding:'4px 8px'}}>{value}</Tag>)}</Flex></Form.Item>
     </Modal>
   </Card>;
 }
@@ -311,7 +320,7 @@ function ParameterQualityRuleEditor({ field, fieldIndex, form }) {
   return <Card size="small" className="coldchain-parameter-card">
     <Row gutter={16}><Col span={8}><Form.Item label="规则名称"><Input value={`${field.label||field.field_id}质检`} disabled/></Form.Item></Col><Col span={8}><Form.Item label="规则 ID"><Input value={`QC-${String(field.field_id||'FIELD').toUpperCase()}`} disabled/></Form.Item></Col><Col span={8}><Form.Item label="检查对象"><Input value={field.label||field.field_id} disabled/></Form.Item></Col></Row>
     <Form.Item name={[fieldIndex,'quality_mode']} label="检查方式" rules={[{required:true}]}><Radio.Group optionType="button" buttonStyle="solid" options={[{label:'函数判断',value:'function'},{label:'语义判断',value:'semantic'}]}/></Form.Item>
-    {mode==='function'?<Form.Item name={[fieldIndex,'quality_python']} label="Python 判断函数" rules={[{required:true,whitespace:true}]} extra="统一返回 true 或 false。"><Input.TextArea placeholder="填写判断函数，返回 true 或 false" className="coldchain-code-textarea" rows={8} spellCheck={false}/></Form.Item>:<><Form.Item name={[fieldIndex,'quality_threshold']} label="语义阈值" rules={[{required:true}]}><InputNumber placeholder="请输入语义阈值（0～1）" min={0} max={1} step={0.01} style={{width:220}}/></Form.Item><Form.Item name={[fieldIndex,'quality_prompt']} label="语义判断 Prompt" rules={[{required:true,whitespace:true}]}><Input.TextArea placeholder="描述语义判断 Prompt，说明目标、约束和输出要求" rows={6}/></Form.Item><Row gutter={12}><Col span={12}><Form.Item name={[fieldIndex,'quality_positive_example']} label="通过示例（可选）"><Input.TextArea placeholder="请输入通过示例（可选）" rows={2}/></Form.Item></Col><Col span={12}><Form.Item name={[fieldIndex,'quality_negative_example']} label="不通过示例（可选）"><Input.TextArea placeholder="请输入不通过示例（可选）" rows={2}/></Form.Item></Col></Row></>}
+    {mode==='function'?<Form.Item name={[fieldIndex,'quality_python']} label="Python 判断函数" rules={[{required:true,whitespace:true}]} extra="统一返回 true 或 false。"><Input.TextArea placeholder="填写判断函数，返回 true 或 false" className="coldchain-code-textarea" rows={8} spellCheck={false} allowClear/></Form.Item>:<><Form.Item name={[fieldIndex,'quality_threshold']} label="语义阈值" rules={[{required:true}]}><InputNumber placeholder="请输入语义阈值（0～1）" min={0} max={1} step={0.01} style={{width:220}}/></Form.Item><Form.Item name={[fieldIndex,'quality_prompt']} label="语义判断 Prompt" rules={[{required:true,whitespace:true}]}><Input.TextArea placeholder="描述语义判断 Prompt，说明目标、约束和输出要求" rows={6} allowClear/></Form.Item><Row gutter={12}><Col span={12}><Form.Item name={[fieldIndex,'quality_positive_example']} label="通过示例（可选）"><Input.TextArea placeholder="请输入通过示例（可选）" rows={2} allowClear/></Form.Item></Col><Col span={12}><Form.Item name={[fieldIndex,'quality_negative_example']} label="不通过示例（可选）"><Input.TextArea placeholder="请输入不通过示例（可选）" rows={2} allowClear/></Form.Item></Col></Row></>}
   </Card>;
 }
 
@@ -320,7 +329,7 @@ function GlobalQualityRuleEditor({ rule, field, index, remove, form }) {
   return <Card size="small" className="section-title conversation-quality-rule" title={<Space><Text strong>{rule.name||'新质检规则'}</Text>{rule.system&&<Tag color="blue">预置规则</Tag>}</Space>} extra={<Space><Form.Item name={[field.name,'enabled']} valuePropName="checked" noStyle><Switch checkedChildren="启用" unCheckedChildren="停用"/></Form.Item><Button type="text" danger icon={<DeleteOutlined/>} onClick={()=>remove(field.name)}>删除</Button></Space>}>
     <Row gutter={16}><Col span={8}><Form.Item name={[field.name,'name']} label="规则名称" rules={[{required:true,whitespace:true}]}><Input placeholder="请输入规则名称"/></Form.Item></Col><Col span={8}><Form.Item name={[field.name,'rule_id']} label="规则 ID"><Input disabled/></Form.Item></Col><Col span={8}><Form.Item name={[field.name,'target']} label="检查对象" rules={[{required:true}]}><Select placeholder="请选择检查对象" options={QUALITY_TARGET_OPTIONS}/></Form.Item></Col></Row>
     <Form.Item name={[field.name,'mode']} label="检查方式" rules={[{required:true}]}><Radio.Group optionType="button" buttonStyle="solid" options={[{label:'函数判断',value:'function'},{label:'语义判断',value:'semantic'}]}/></Form.Item>
-    {mode==='semantic'?<><Form.Item name={[field.name,'threshold']} label="语义阈值" rules={[{required:true}]}><InputNumber placeholder="请输入语义阈值（0～1）" min={0} max={1} step={0.01} style={{width:220}}/></Form.Item><Form.Item name={[field.name,'prompt']} label="语义判断 Prompt" rules={[{required:true,whitespace:true}]}><Input.TextArea placeholder="描述语义判断 Prompt，说明目标、约束和输出要求" rows={6}/></Form.Item><Row gutter={12}><Col span={12}><Form.Item name={[field.name,'positive_example']} label="通过示例（可选）"><Input.TextArea placeholder="请输入通过示例（可选）" rows={2}/></Form.Item></Col><Col span={12}><Form.Item name={[field.name,'negative_example']} label="不通过示例（可选）"><Input.TextArea placeholder="请输入不通过示例（可选）" rows={2}/></Form.Item></Col></Row></>:<Form.Item name={[field.name,'python_code']} label="Python 判断函数" rules={[{required:true,whitespace:true}]} extra="统一返回 true 或 false。"><Input.TextArea placeholder="填写判断函数，返回 true 或 false" className="coldchain-code-textarea" rows={8} spellCheck={false}/></Form.Item>}
+    {mode==='semantic'?<><Form.Item name={[field.name,'threshold']} label="语义阈值" rules={[{required:true}]}><InputNumber placeholder="请输入语义阈值（0～1）" min={0} max={1} step={0.01} style={{width:220}}/></Form.Item><Form.Item name={[field.name,'prompt']} label="语义判断 Prompt" rules={[{required:true,whitespace:true}]}><Input.TextArea placeholder="描述语义判断 Prompt，说明目标、约束和输出要求" rows={6} allowClear/></Form.Item><Row gutter={12}><Col span={12}><Form.Item name={[field.name,'positive_example']} label="通过示例（可选）"><Input.TextArea placeholder="请输入通过示例（可选）" rows={2} allowClear/></Form.Item></Col><Col span={12}><Form.Item name={[field.name,'negative_example']} label="不通过示例（可选）"><Input.TextArea placeholder="请输入不通过示例（可选）" rows={2} allowClear/></Form.Item></Col></Row></>:<Form.Item name={[field.name,'python_code']} label="Python 判断函数" rules={[{required:true,whitespace:true}]} extra="统一返回 true 或 false。"><Input.TextArea placeholder="填写判断函数，返回 true 或 false" className="coldchain-code-textarea" rows={8} spellCheck={false} allowClear/></Form.Item>}
   </Card>;
 }
 
@@ -330,10 +339,10 @@ function ModelSceneQualityEditor({ field, index, remove, form, fieldOptions }) {
   return <Card size="small" className="section-title conversation-quality-rule" title={<Space><Text strong>{form.getFieldValue(['modelQualityRules',index,'name'])||'新场景规则'}</Text></Space>} extra={<Space><Form.Item name={[field.name,'enabled']} valuePropName="checked" noStyle><Switch checkedChildren="启用" unCheckedChildren="停用"/></Form.Item><Button type="text" danger icon={<DeleteOutlined/>} onClick={()=>remove(field.name)}>删除</Button></Space>}>
     <Form.Item name={[field.name,'rule_id']} hidden><Input/></Form.Item>
     <Row gutter={16}><Col span={10}><Form.Item name={[field.name,'name']} label="规则名称" rules={enabled?[{required:true,whitespace:true,message:'请输入规则名称'}]:[]}><Input placeholder="例如：断电后的温度响应"/></Form.Item></Col><Col span={14}><Form.Item name={[field.name,'target_fields']} label="检查对象" rules={enabled?[{required:true,type:'array',min:1,message:'至少选择一个检查字段'}]:[]}><Select mode="multiple" options={fieldOptions} placeholder="选择第二步已启用字段"/></Form.Item></Col></Row>
-    <Form.Item name={[field.name,'condition_scope']} label="检查条件与范围 Prompt" rules={enabled?[{required:true,whitespace:true,message:'请填写检查条件与范围'}]:[]} extra="说明何时适用，以及检查整段、事件期间还是各字段自己的恢复窗口。"><Input.TextArea rows={3} placeholder="所有样本，整条序列"/></Form.Item>
-    <Form.Item name={[field.name,'acceptance_requirement']} label="合格判定要求 Prompt" rules={enabled?[{required:true,whitespace:true,message:'请填写合格判定要求'}]:[]} extra="描述应满足的趋势、关联、响应、阈值或结果，不需要填写样本索引。"><Input.TextArea rows={4} placeholder="说明模型应依据实际序列判断哪些表现符合要求"/></Form.Item>
-    <Form.Item name={[field.name,'exceptions_tolerance']} label="例外与容差 Prompt（可选）" extra="填写允许偏差，以及证据不足时不能直接判错的情况。"><Input.TextArea placeholder="描述例外与容差 Prompt（可选），说明目标、约束和输出要求" rows={3}/></Form.Item>
-    <Collapse ghost items={[{key:'advanced',label:'高级设置',children:<><Row gutter={16}><Col span={12}><Form.Item name={[field.name,'on_failure']} label="不满足时处理"><Select placeholder="请选择不满足时处理" options={[{value:'review',label:'进入待复核'},{value:'reject',label:'判定不通过'}]}/></Form.Item></Col><Col span={12}><Form.Item name={[field.name,'mode']} label="检查方式"><Radio.Group options={[{value:'semantic',label:'模型评审'},{value:'function',label:'Python 函数'}]}/></Form.Item></Col></Row>{mode==='function'&&<Form.Item name={[field.name,'python_code']} label="Python 判断函数" rules={enabled?[{required:true,whitespace:true,message:'请填写判断函数'}]:[]} extra="沿用已有函数返回协议；三段文本作为规则说明保留，不再发起模型评审。"><Input.TextArea placeholder="填写判断函数，返回 true 或 false" className="coldchain-code-textarea" rows={8} spellCheck={false}/></Form.Item>}</>}]} />
+    <Form.Item name={[field.name,'condition_scope']} label="检查条件与范围 Prompt" rules={enabled?[{required:true,whitespace:true,message:'请填写检查条件与范围'}]:[]} extra="说明何时适用，以及检查整段、事件期间还是各字段自己的恢复窗口。"><Input.TextArea rows={3} placeholder="所有样本，整条序列" allowClear/></Form.Item>
+    <Form.Item name={[field.name,'acceptance_requirement']} label="合格判定要求 Prompt" rules={enabled?[{required:true,whitespace:true,message:'请填写合格判定要求'}]:[]} extra="描述应满足的趋势、关联、响应、阈值或结果，不需要填写样本索引。"><Input.TextArea rows={4} placeholder="说明模型应依据实际序列判断哪些表现符合要求" allowClear/></Form.Item>
+    <Form.Item name={[field.name,'exceptions_tolerance']} label="例外与容差 Prompt（可选）" extra="填写允许偏差，以及证据不足时不能直接判错的情况。"><Input.TextArea placeholder="描述例外与容差 Prompt（可选），说明目标、约束和输出要求" rows={3} allowClear/></Form.Item>
+    <Collapse ghost items={[{key:'advanced',label:'高级设置',children:<><Row gutter={16}><Col span={12}><Form.Item name={[field.name,'on_failure']} label="不满足时处理"><Select placeholder="请选择不满足时处理" options={[{value:'review',label:'进入待复核'},{value:'reject',label:'判定不通过'}]}/></Form.Item></Col><Col span={12}><Form.Item name={[field.name,'mode']} label="检查方式"><Radio.Group options={[{value:'semantic',label:'模型评审'},{value:'function',label:'Python 函数'}]}/></Form.Item></Col></Row>{mode==='function'&&<Form.Item name={[field.name,'python_code']} label="Python 判断函数" rules={enabled?[{required:true,whitespace:true,message:'请填写判断函数'}]:[]} extra="沿用已有函数返回协议；三段文本作为规则说明保留，不再发起模型评审。"><Input.TextArea placeholder="填写判断函数，返回 true 或 false" className="coldchain-code-textarea" rows={8} spellCheck={false} allowClear/></Form.Item>}</>}]}  allowClear/>
   </Card>;
 }
 
@@ -372,7 +381,7 @@ function SynthesisPromptPreview({ form }) {
     {compileError&&<Alert className="section-title" type="error" showIcon message="编译校验未通过" description={compileError}/>} 
     <Tabs className="section-title" items={[
       {key:'assignment',label:'已分配采样条件',children:<><Flex justify="flex-end"><Button icon={<CopyOutlined/>} onClick={()=>copy(JSON.stringify(assignment,null,2))}>复制采样条件</Button></Flex><pre className="conversation-prompt-preview section-title">{JSON.stringify(assignment,null,2)}</pre></>},
-      {key:'stage1',label:'阶段一：事件生成 Prompt',children:stage1?<><Flex justify="flex-end"><Button icon={<CopyOutlined/>} onClick={()=>copy(JSON.stringify({messages:stage1.messages},null,2))}>复制请求</Button></Flex><Tabs items={requestViews(stage1)}/></>:<Empty description="请先修复编译问题"/>},
+      {key:'stage1',label:generationMethod==='engine'?'事件生成Prompt':'阶段一：事件生成 Prompt',children:stage1?<><Flex justify="flex-end"><Button icon={<CopyOutlined/>} onClick={()=>copy(JSON.stringify({messages:stage1.messages},null,2))}>复制请求</Button></Flex><Tabs items={requestViews(stage1)}/></>:<Empty description="请先修复编译问题"/>},
       generationMethod==='model'?{key:'stage2',label:'阶段二：时序数据生成 Prompt',children:<><Alert type={demoBound?'warning':'info'} showIcon message={demoBound?'当前绑定内置演示事件':'frozen_event 待阶段一生成并校验'} description={demoBound?'此事件仅用于页面联调，不是当前模型实际生成结果。':'System Prompt与请求骨架可预览；未绑定冻结事件前不是可发送请求。'}/><Flex justify="space-between" align="center" className="section-title"><Button icon={<CopyOutlined/>} disabled={!stage2} onClick={()=>stage2&&copy(JSON.stringify({messages:stage2.messages},null,2))}>复制可执行请求</Button></Flex><Tabs items={requestViews(stage2||skeleton)}/></>}:null,
     ].filter(Boolean)}/>
   </>;
@@ -391,18 +400,19 @@ function buildConfiguration(values) {
   const selectedEvents=generationMethod==='model'?(values.eventDefinitions||[]).filter(Boolean).map(item=>({...item,prompt:[item.description_definition,item.impact_targets&&`影响对象：${item.impact_targets}`,item.duration_range&&`持续时间范围：${item.duration_range}`,item.intensity_parameters&&`强度参数：${item.intensity_parameters}`,item.occurrence_conditions&&`发生条件：${item.occurrence_conditions}`].filter(Boolean).join('\n'),custom:!EVENT_OPTIONS.some(option=>option.value===item.event_id)})):eventTypeNames.map(eventId=>{const meta=EVENT_OPTIONS.find(item=>item.value===eventId);return {event_id:eventId,name:meta?.label||eventId,engine_rule:true,...(engineOverrides.get(eventId)||{})};});
   const allowedEvents=[...new Set([...eventTypeNames.map(name=>EVENT_NAME_TO_ID[name]).filter(Boolean),...selectedEvents.map(item=>item.event_id)])];
   const safeFields=(Array.isArray(values.fields)?values.fields:[]).filter(Boolean);
+  safeFields.forEach(validateValueMode);
   const fieldIds=safeFields.map(item=>item.field_id);
   if(new Set(fieldIds).size!==fieldIds.length)throw new Error('输出字段 ID 必须唯一');
   if(safeFields.some(item=>!PARAMETER_TYPES.some(type=>type.value===item.type)))throw new Error('输出字段存在不支持的数据类型');
   if(safeFields.some(item=>['string','integer'].includes(item.type)&&(item.enum_values||[]).length===0&&item.value_schema?.enum?.length===0))throw new Error('离散输出字段必须维护至少一个枚举值');
   if(fieldIds.includes('return_air_temperature_observed')&&!fieldIds.includes('return_air_temperature'))throw new Error('箱温传感器读数依赖真实箱温（回风），请恢复 return_air_temperature 或删除依赖字段');
   const engine=ENGINE_CATALOG.find(item=>item.value===values.generationEngineId);
-  const engineSelectedFields=Array.isArray(values.engineSelectedFields)?values.engineSelectedFields:[];
+  const engineSelectedFields=(Array.isArray(values.engineSelectedFields)?values.engineSelectedFields:[]).filter(id=>engine?.fields.includes(id));
   if(generationMethod==='engine'&&!engine)throw new Error('请选择已接入的生成引擎');
   if(generationMethod==='engine'&&!eventTypeNames.length)throw new Error('请至少勾选一个引擎事件');
   if(generationMethod==='engine'&&!engineSelectedFields.length)throw new Error('请至少勾选一个引擎输出字段');
-  const sourceFields=generationMethod==='model'?safeFields:engineSelectedFields.map(fieldId=>safeFields.find(item=>item.field_id===fieldId)||{field_id:fieldId,label:COLD_CHAIN_PARAMETER_OPTIONS.find(item=>item.value===fieldId)?.label||fieldId,type:['power_status','transport_event','network_status','status'].includes(fieldId)?'string':fieldId==='gps'?'object':'number',unit:DEFAULT_FIELD_UNITS[fieldId]||'',enum_values:[],quality_mode:'function',quality_python:'def validate(value, context):\n    return value is not None'});
-  if(generationMethod==='model'&&sourceFields.some(item=>!String(item.overall_change_rules||'').trim()))throw new Error('请填写每个输出字段的整体变化规则');
+  const sourceFields=generationMethod==='model'?safeFields:engineSelectedFields.map(fieldId=>safeFields.find(item=>item.field_id===fieldId)||COLDCHAIN_MODEL_FIELDS.find(item=>item.field_id===fieldId)||{field_id:fieldId,label:COLD_CHAIN_PARAMETER_OPTIONS.find(item=>item.value===fieldId)?.label||fieldId,type:['power_status','transport_event','network_status','status'].includes(fieldId)?'string':fieldId==='gps'?'object':'number',unit:DEFAULT_FIELD_UNITS[fieldId]||'',enum_values:[],quality_mode:'function',quality_python:'def validate(value, context):\n    return value is not None'});
+  if(generationMethod==='model'&&sourceFields.some(item=>(item.value_mode||'dynamic')==='dynamic'&&!String(item.overall_change_rules||'').trim()))throw new Error('请填写每个输出字段的整体变化规则');
   const fields=sourceFields.map(item=>{
     const {
       generation_mode='function',generation_python='',generation_prompt='',
@@ -428,13 +438,14 @@ function buildConfiguration(values) {
   }));
   return {
     quality_catalog:qualityConfig('时序数据',values.qualityCatalog),
-    privacy_policy:values.privacyPolicy||[],name:values.name,description:values.description,scope:'custom',business_type:values.businessType||'冷藏集装箱物流',
+    privacy_policy:values.privacyPolicy||[],name:values.name,description:values.description,scope:'custom',business_type:values.businessType||'温湿度时序数据',
     event_generation:{prompt_version:'timeseries-two-stage/v1',scene_config:{business_scene_description:values.businessSceneDescription,monitored_object_and_system:values.monitoredObjectAndSystem,sample_scope:values.sampleScope,normal_operation_patterns:values.normalOperationPatterns,event_parameter_relationships:values.eventParameterRelationships,business_constraints:values.businessConstraints,other_notes:values.otherNotes||''},scenario_prompt:[values.businessSceneDescription,values.monitoredObjectAndSystem,values.sampleScope,values.normalOperationPatterns,values.eventParameterRelationships,values.businessConstraints,values.otherNotes].filter(Boolean).join('\n\n'),sampling_dimensions:(values.eventDimensions||[]).map((item,index)=>({...item,dimension_id:item.dimension_id||stableConfigId('dim'),option_ids:Object.fromEntries((item.values||[]).map((value,optionIndex)=>[value,item.option_ids?.[value]||`opt_${index}_${optionIndex}_${Date.now().toString(36)}`]))})),allowed_events:allowedEvents,event_definitions:selectedEvents,event_candidates:selectedEvents,compatibility_rules:COLDCHAIN_MODEL_CONFIGURATION.event_generation.compatibility_rules,event_strategy:'candidate_selection',llm_numeric_truth_impact:false},
     coverage:coverageLabels.length?{
       schema_version:'coldchain-coverage/v1',strategy:'template_profile_pass_only',labeling_prompt:values.coverageLabelingPrompt,
       dimensions:[{dimension_id:'primary_event',name:'主要事件',labels:coverageLabels}],
       profiles:coverageLabels.map(item=>({profile_id:`${item.value}_profile`,name:item.name,labels:{primary_event:item.value},target_weight:1,minimum_pass_count:0,required:true})),
     }:null,
+    engine_fields_v2:true,
     generation:{method:generationMethod,...(generationMethod==='model'?{field_prompt_mode:'per_field_joint_call'}:{engine_id:values.generationEngineId,selected_fields:engineSelectedFields,selected_events:eventTypeNames,event_overrides:values.engineEventOverrides||[]})},
     rule_engine:{engine_id:generationMethod==='engine'?values.generationEngineId:null,user_code_allowed:false},
     quality:{
@@ -450,6 +461,13 @@ function buildConfiguration(values) {
 }
 
 function configurationToForm(config) {
+  if(['冷藏集装箱物流','冷藏集装箱物流温湿度数据'].includes(config.business_type))config={...config,business_type:'温湿度时序数据'};
+  if((config.generation?.method||'engine')==='engine'&&(config.generation?.engine_id||config.rule_engine?.engine_id||'coldchain_physics_v1')==='coldchain_physics_v1'){
+    const ids=COLDCHAIN_MODEL_FIELDS.map(field=>field.field_id);
+    const previous=config.generation?.selected_fields||config.fields?.map(field=>field.field_id)||ids;
+    const migrated=!config.engine_fields_v2;
+    config={...config,fields:COLDCHAIN_MODEL_FIELDS.map(seed=>({...seed,...(config.fields||[]).find(field=>field.field_id===seed.field_id),label:seed.label,...(seed.value_mode!=='dynamic'?{value_mode:seed.value_mode,fixed_value:seed.fixed_value,range_min:seed.range_min,range_max:seed.range_max}:{})})),generation:{...config.generation,selected_fields:migrated?ids:previous.filter(id=>ids.includes(id))}};
+  }
   const primaryDimension=(config.coverage?.dimensions||[]).find(item=>item.dimension_id==='primary_event');
   const selectedEvents=new Map((config.event_generation?.event_candidates||[]).map(item=>[item.event_id,item]));
   const allowedEvents=new Set(config.event_generation?.allowed_events||[]);
@@ -492,7 +510,7 @@ function configurationToForm(config) {
   const engineFieldMappings=generation.field_mappings||fields.map(item=>({source_field_id:item.field_id,source_field_name:item.label,engine_field:item.generation_rules?.[0]?.engine_field||item.field_id}));
   const engineEventMappings=generation.event_mappings||eventDefinitions.map(item=>({source_event:item.name,engine_event:item.event_id}));
   return {qualityCatalog:qualityConfig('时序数据',config.quality_catalog),privacyPolicy:config.privacy_policy||[],
-    name:config.name,businessType:config.business_type||'冷藏集装箱物流',description:config.description,
+    name:config.name,businessType:config.business_type||'温湿度时序数据',description:config.description,
     businessSceneDescription:scene.business_scene_description||legacyPrompt||'冷藏货物经历公路运输、港口等待和海运，期间持续进行环境与设备监测',
     monitoredObjectAndSystem:scene.monitored_object_and_system||'一台装载货物的冷藏集装箱，包含制冷设备、箱内空气、货物及温湿度传感器',
     sampleScope:scene.sample_scope||'一条样本对应一个集装箱的一次运输过程，包含多个连续监测时刻',
@@ -564,9 +582,14 @@ function GpsTrialChart({ points=[] }) {
 
 export function ColdChainTemplateEditor({ draftId, template, onClose, onPublished, readOnly = false }) {
   const [form]=Form.useForm();const [step,setStep]=useState(0);const [draft,setDraft]=useState(null);const [dirty,setDirty]=useState(false);const [action,setAction]=useState('');const [loading,setLoading]=useState(true);const [validation,setValidation]=useState(null);const [trial,setTrial]=useState(null);
-  useEffect(()=>{let active=true;setLoading(true);const request=draftId?coldchainApi.getTemplateDraft(draftId):template?Promise.resolve(template):coldchainApi.createTemplateDraft({});request.then(value=>{if(!active)return;setDraft(value);setValidation(value.validation||null);setTrial(value.trial_run||null);form.setFieldsValue(configurationToForm(value.configuration||value));setDirty(false);}).catch(error=>message.error(error.message)).finally(()=>{if(active)setLoading(false);});return()=>{active=false;};},[draftId,template,form]);
-  const save=async({quiet=false}={})=>{setAction('save');try{await form.validateFields();const config=buildConfiguration(form.getFieldsValue(true));const response=await coldchainApi.saveTemplateDraft(draft.draft_id,config,draft.revision);setDraft(response);setValidation(response.validation||null);setTrial(response.trial_run||null);setDirty(false);if(!quiet)message.success('草稿已保存');return response;}finally{setAction('');}};
+  useEffect(()=>{setLeaveDirty(dirty&&!readOnly);return()=>setLeaveDirty(false);},[dirty,readOnly]);
+  useEffect(()=>{let active=true;setLoading(true);const request=draftId?coldchainApi.getTemplateDraft(draftId):template?Promise.resolve(template):Promise.resolve(null);request.then(value=>{if(!active)return;setDraft(value);setValidation(value?.validation||null);setTrial(value?.trial_run||null);if(value)form.setFieldsValue(configurationToForm(value.configuration||value));else form.setFieldsValue({...configurationToForm(COLDCHAIN_MODEL_CONFIGURATION),name:'',description:''});setDirty(false);}).catch(error=>message.error(error.message)).finally(()=>{if(active)setLoading(false);});return()=>{active=false;};},[draftId,template,form]);
+  const save=async({quiet=false}={})=>{setAction('save');try{await form.validateFields();const config=buildConfiguration(form.getFieldsValue(true));const response=draft?await coldchainApi.saveTemplateDraft(draft.draft_id,config,draft.revision):await coldchainApi.createTemplateDraft({configuration:config});setDraft(response);setValidation(response.validation||null);setTrial(response.trial_run||null);setDirty(false);if(!quiet)message.success('草稿已保存');return response;}finally{setAction('');}};
   const ensureSaved=async()=>!draft||dirty?save({quiet:true}):draft;
+  const requestClose=()=>{
+    if(readOnly||!dirty){onClose();return;}
+    Modal.confirm({title:'有未保存的修改，确定离开吗？',content:'离开后本次未保存的修改会丢失。',okText:'放弃修改',okType:'danger',cancelText:'继续编辑',onOk:onClose});
+  };
   const next=async()=>{if(readOnly){setStep(value=>Math.min(STEP_ITEMS.length-1,value+1));return;}try{if(step===0)await form.validateFields(['name','businessType','description','businessSceneDescription','monitoredObjectAndSystem','sampleScope','normalOperationPatterns','eventParameterRelationships','businessConstraints','otherNotes']);else await form.validateFields();await ensureSaved();setStep(value=>Math.min(STEP_ITEMS.length-1,value+1));}catch(error){if(error?.errorFields)message.warning('请检查当前步骤配置');else message.error(error.message);}};
   const runTrial=async()=>{setAction('trial');try{const fields=['trialModel','trialQualityModel','trialSampleCount','trialStepCount','trialIntervalMinutes'];if(form.getFieldValue('trialGenerationParamsEnabled'))fields.push('trialGenerationParamsJson');if(form.getFieldValue('trialQualityParamsEnabled'))fields.push('trialQualityParamsJson');await form.validateFields(fields);const saved=await ensureSaved();const checked=await coldchainApi.validateTemplateDraft(saved.draft_id,saved.revision);setValidation(checked);if(!checked.valid){message.error((checked.errors||[]).join('；'));return;}const values=form.getFieldsValue(true);const generationParameters=values.trialGenerationParamsEnabled?JSON.parse(values.trialGenerationParamsJson):null;const qualityParameters=values.trialQualityParamsEnabled?JSON.parse(values.trialQualityParamsJson):null;const result=await coldchainApi.trialTemplateDraft(saved.draft_id,{expected_revision:saved.revision,model_alias:values.trialModel||'qwen3-14b',quality_model_alias:values.trialQualityModel||'qwen3-14b',sample_count:Number(values.trialSampleCount||2),step_count:Number(values.trialStepCount||100),interval_minutes:Number(values.trialIntervalMinutes||10),...(generationParameters?{generation_parameters:generationParameters}:{}),...(qualityParameters?{quality_parameters:qualityParameters}:{})});setTrial(result);message.success('试运行执行结束，请查看逐规则报告');}catch(error){if(error?.errorFields)message.warning('请检查试运行配置');else message.error(error.message);}finally{setAction('');}};
   const publish=async()=>{setAction('publish');try{const response=await coldchainApi.publishTemplateDraft(draft.draft_id,draft.revision);message.success(`${response.published_template.template_id} 已发布`);onPublished?.(response.published_template);}catch(error){message.error(error.message);}finally{setAction('');}};
@@ -583,34 +606,34 @@ export function ColdChainTemplateEditor({ draftId, template, onClose, onPublishe
   const semanticRuleCount=generationMethod==='model'?watchedQualityRules.filter(rule=>rule.enabled!==false&&rule.mode!=='function').length:0;
   const generationCallEstimate=Number(watchedTrialSampleCount);const qualityCallEstimate=Number(watchedTrialSampleCount)*semanticRuleCount;
   return <div className="template-create-page coldchain-template-create-page" data-ued-readonly={readOnly || undefined}>
-    <Flex className="page-header" justify="space-between" align="flex-start"><Space align="start"><Button type="text" icon={<LeftOutlined/>} aria-label="返回模板中心" onClick={onClose}/><div><Title level={2}>时序类数据模板</Title><Paragraph type="secondary">依次完成场景定义、生成配置、两阶段指令预览、质检规则和试运行。</Paragraph></div></Space></Flex>
+    <Flex className="page-header" justify="space-between" align="flex-start"><Space align="start"><Button type="text" icon={<LeftOutlined/>} aria-label="返回模板中心" onClick={requestClose}/><div><Title level={2}>时序类数据模板</Title><Paragraph type="secondary">依次完成场景定义、生成配置、两阶段指令预览、质检规则和试运行。</Paragraph></div></Space></Flex>
     <Flex justify="space-between" align="center" wrap="wrap" gap={12} className="conversation-template-statusbar template-editor-step-actions-top">
-      <Text type="secondary">ID：{draft.draft_id||template?.template_id}{template&&!template.draft_id&&template.version?` · 版本 ${template.version}`:''}</Text>
-      <Space>{!readOnly&&<Button onClick={onClose}>取消</Button>}<Button icon={<ArrowLeftOutlined/>} disabled={step===0} onClick={()=>setStep(value=>Math.max(0,value-1))}>上一步</Button>{!readOnly&&<Button icon={<SaveOutlined/>} loading={action==='save'} disabled={!dirty} onClick={()=>save()}>保存模板草稿</Button>}{step<STEP_ITEMS.length-1&&<Button type="primary" icon={<ArrowRightOutlined/>} loading={action==='save'} onClick={next}>下一步</Button>}{!readOnly&&step===STEP_ITEMS.length-1&&<Tooltip title={!privacyPassed&&trial?.rule_report?'模板隐私检查不通过，请修改后重新试运行':''}><span><Button type="primary" icon={<CheckCircleOutlined/>} disabled={!currentTrial||!validation?.valid} loading={action==='publish'} onClick={publish}>发布模板</Button></span></Tooltip>}</Space>
+      <Text type="secondary">{draft?.draft_id||template?.template_id?`ID：${draft?.draft_id||template?.template_id}`:''}{template&&!template.draft_id&&template.version?` · 版本 ${template.version}`:''}</Text>
+      <Space>{!readOnly&&<Button onClick={requestClose}>取消</Button>}<Button icon={<ArrowLeftOutlined/>} disabled={step===0} onClick={()=>setStep(value=>Math.max(0,value-1))}>上一步</Button>{!readOnly&&<Button icon={<SaveOutlined/>} loading={action==='save'} disabled={!dirty} onClick={()=>save()}>保存草稿</Button>}{step<STEP_ITEMS.length-1&&<Button type="primary" icon={<ArrowRightOutlined/>} loading={action==='save'} onClick={next}>下一步</Button>}{!readOnly&&step===STEP_ITEMS.length-1&&<Tooltip title={!privacyPassed&&trial?.rule_report?'模板隐私检查不通过，请修改后重新试运行':''}><span><Button type="primary" icon={<CheckCircleOutlined/>} disabled={!currentTrial||!validation?.valid} loading={action==='publish'} onClick={publish}>发布模板</Button></span></Tooltip>}</Space>
     </Flex>
     <Steps current={step} items={STEP_ITEMS} onChange={target=>readOnly?setStep(target):target<step?setStep(target):null} className="template-editor-steps"/>
     <Form disabled={readOnly} form={form} layout="vertical" onValuesChange={changed=>{if(Object.keys(changed).every(key=>['trialModel','trialSampleCount'].includes(key)))return;setDirty(true);setValidation(null);}}>
       {step===0&&<>
         <Card className="main-card" title="模板基本信息">
-        <Row gutter={16}><Col span={12}><Form.Item name="name" label="模板名称" rules={[{required:true},{max:80}]}><Input placeholder="请输入模板名称"/></Form.Item></Col><Col span={12}><Form.Item name="businessType" label="业务类型" rules={[{required:true,message:'请选择业务类型'}]}><BusinessTypeSelect modality="time_series"/></Form.Item></Col></Row>
-        <Form.Item name="description" label="模板描述" rules={[{max:500}]}><Input.TextArea rows={3} maxLength={500} showCount placeholder="简要说明模板覆盖的时序业务和用途"/></Form.Item>
+        <Row gutter={16}><Col span={12}><Form.Item name="name" label="模板名称" rules={[{required:true},{max:80}]}><Input autoFocus placeholder="请输入模板名称"/></Form.Item></Col><Col span={12}><Form.Item name="businessType" label="业务类型" rules={[{required:true,message:'请选择业务类型'}]}><BusinessTypeSelect modality="time_series"/></Form.Item></Col></Row>
+        <Form.Item name="description" label="模板描述" rules={[{max:500}]}><Input.TextArea rows={3} maxLength={500} showCount placeholder="简要说明模板覆盖的时序业务和用途" allowClear/></Form.Item>
         </Card>
         <Card className="main-card conversation-step-card section-title" title="事件场景配置">
           <Alert type="info" showIcon message="描述业务过程、对象和约束边界" description="系统依据场景、事件和字段规则，分两阶段生成事件计划与时序数据。"/>
-          <Form.Item className="section-title" name="businessSceneDescription" label="业务场景说明" rules={[{required:true,whitespace:true},{max:2000}]} extra="填写什么业务过程、在什么环境中发生。"><Input.TextArea rows={3} placeholder="冷藏货物经历公路运输、港口等待和海运，期间持续进行环境与设备监测"/></Form.Item>
-          <Form.Item name="monitoredObjectAndSystem" label="监测对象与系统组成" rules={[{required:true,whitespace:true},{max:2000}]} extra="说明观察对象，以及由哪些关键部分组成。"><Input.TextArea rows={3} placeholder="一台装载货物的冷藏集装箱，包含制冷设备、箱内空气、货物及温湿度传感器"/></Form.Item>
-          <Form.Item name="sampleScope" label="单条样本范围" rules={[{required:true,whitespace:true},{max:2000}]} extra="说明一条样本覆盖一个还是多个对象，代表什么过程。"><Input.TextArea rows={3} placeholder="一条样本对应一个集装箱的一次运输过程，包含多个连续监测时刻"/></Form.Item>
-          <Form.Item name="normalOperationPatterns" label="正常运行规律" rules={[{required:true,whitespace:true},{max:2000}]} extra="说明没有目标异常时系统通常怎样运行。"><Input.TextArea rows={3} placeholder="制冷设备围绕设定温度调节；送风、回风和货物温度存在差异；货物温度变化通常比空气温度慢"/></Form.Item>
-          <Form.Item name="eventParameterRelationships" label="事件影响与参数关联" rules={[{required:true,whitespace:true},{max:2000}]} extra="说明事件影响哪些量、字段依赖以及恢复过程。"><Input.TextArea rows={3} placeholder="开门改变内外空气交换；断电影响制冷能力；传感器偏移影响读数，不直接改变真实货温"/></Form.Item>
-          <Form.Item name="businessConstraints" label="业务约束与边界" rules={[{required:true,whitespace:true},{max:2000}]} extra="说明不能出现的情况和不能随意假设的结论。"><Input.TextArea rows={4} placeholder="公路阶段的位置沿路线推进；短时断电不必然导致货温超限；网络中断不等于温度变为0"/></Form.Item>
-          <Form.Item name="otherNotes" label="其它说明（可选）" rules={[{max:1000}]}><Input.TextArea rows={2} placeholder="尚未覆盖的业务补充，可留空"/></Form.Item>
+          <Form.Item className="section-title" name="businessSceneDescription" label="业务场景说明" rules={[{required:true,whitespace:true},{max:2000}]} extra="填写什么业务过程、在什么环境中发生。"><Input.TextArea rows={3} placeholder="冷藏货物经历公路运输、港口等待和海运，期间持续进行环境与设备监测" allowClear/></Form.Item>
+          <Form.Item name="monitoredObjectAndSystem" label="监测对象与系统组成" rules={[{required:true,whitespace:true},{max:2000}]} extra="说明观察对象，以及由哪些关键部分组成。"><Input.TextArea rows={3} placeholder="一台装载货物的冷藏集装箱，包含制冷设备、箱内空气、货物及温湿度传感器" allowClear/></Form.Item>
+          <Form.Item name="sampleScope" label="单条样本范围" rules={[{required:true,whitespace:true},{max:2000}]} extra="说明一条样本覆盖一个还是多个对象，代表什么过程。"><Input.TextArea rows={3} placeholder="一条样本对应一个集装箱的一次运输过程，包含多个连续监测时刻" allowClear/></Form.Item>
+          <Form.Item name="normalOperationPatterns" label="正常运行规律" rules={[{required:true,whitespace:true},{max:2000}]} extra="说明没有目标异常时系统通常怎样运行。"><Input.TextArea rows={3} placeholder="制冷设备围绕设定温度调节；送风、回风和货物温度存在差异；货物温度变化通常比空气温度慢" allowClear/></Form.Item>
+          <Form.Item name="eventParameterRelationships" label="事件影响与参数关联" rules={[{required:true,whitespace:true},{max:2000}]} extra="说明事件影响哪些量、字段依赖以及恢复过程。"><Input.TextArea rows={3} placeholder="开门改变内外空气交换；断电影响制冷能力；传感器偏移影响读数，不直接改变真实货温" allowClear/></Form.Item>
+          <Form.Item name="businessConstraints" label="业务约束与边界" rules={[{required:true,whitespace:true},{max:2000}]} extra="说明不能出现的情况和不能随意假设的结论。"><Input.TextArea rows={4} placeholder="公路阶段的位置沿路线推进；短时断电不必然导致货温超限；网络中断不等于温度变为0" allowClear/></Form.Item>
+          <Form.Item name="otherNotes" label="其它说明（可选）" rules={[{max:1000}]}><Input.TextArea rows={2} placeholder="尚未覆盖的业务补充，可留空" allowClear/></Form.Item>
         </Card>
       </>}
       {step===1&&<>
       <GenerationMethodSelector form={form}/>
       {generationMethod==='model'?<>
       <Card className="main-card conversation-step-card section-title" title="事件生成配置">
-        <Card size="small" className="conversation-config-card"><EventSamplingDimensionsEditor form={form}/></Card>
+        <EventSamplingDimensionsEditor form={form}/>
         <Card size="small" className="conversation-config-card section-title" title="事件定义">
           <EventDefinitionsEditor form={form}/>
         </Card>
@@ -637,19 +660,19 @@ export function ColdChainTemplateEditor({ draftId, template, onClose, onPublishe
           {key:'steps',label:'时序规格',children:`${trial.step_count} 步 / ${trial.interval_minutes} 分钟间隔`},
           {key:'qwen',label:'Qwen',children:`${trial.qwen?.status} / ${trial.qwen?.call_count||0} 次`},
         ]}/>
-          <Card className="section-title" size="small" title="1. 事件内容生成请求">
+          <Card className="section-title" size="small" title="阶段一：事件内容生成">
             <Tabs items={[
-              {key:'assignment',label:'分配采样条件',children:<Input.TextArea className="coldchain-json-textarea" value={JSON.stringify(trial.assignment||{},null,2)} readOnly autoSize={{minRows:14,maxRows:26}}/>},
-              {key:'stage1',label:'阶段一完整请求',children:<Input.TextArea className="coldchain-json-textarea" value={JSON.stringify(trial.stage1_request||{},null,2)} readOnly autoSize={{minRows:14,maxRows:26}}/>},
+              {key:'assignment',label:'采样条件',children:<Input.TextArea className="coldchain-json-textarea" value={JSON.stringify(trial.assignment||{},null,2)} readOnly autoSize={{minRows:14,maxRows:26}}/>},
+              {key:'request',label:'完整请求',children:<Input.TextArea className="coldchain-json-textarea" value={JSON.stringify(trial.stage1_request||{},null,2)} readOnly autoSize={{minRows:14,maxRows:26}}/>},
+              {key:'event',label:'事件内容生成',children:<Input.TextArea className="coldchain-json-textarea" value={JSON.stringify(trial.generated_event||{},null,2)} readOnly autoSize={{minRows:14,maxRows:26}}/>},
             ]}/>
           </Card>
-          <Card className="section-title" size="small" title="2. 事件内容合成" extra={<Text copyable={{text:JSON.stringify(trial.generated_event||{},null,2)}}>复制 JSON</Text>}>
-            <Input.TextArea className="coldchain-json-textarea" value={JSON.stringify(trial.generated_event||{},null,2)} readOnly autoSize={{minRows:14,maxRows:26}}/>
+          <Card className="section-title" size="small" title="阶段二：时序数据生成">
+            <Tabs items={[
+              ...(generationMethod==='model'?[{key:'request',label:'完整请求',children:<Input.TextArea className="coldchain-json-textarea" value={JSON.stringify(trial.stage2_request||{},null,2)} readOnly autoSize={{minRows:14,maxRows:26}}/>}]:[]),
+              {key:'series',label:'时序数据生成',children:<Input.TextArea className="coldchain-json-textarea" value={JSON.stringify(trial.output_series||[],null,2)} readOnly autoSize={{minRows:14,maxRows:26}}/>},
+            ]}/>
           </Card>
-          <Card className="section-title" size="small" title="3. 时序字段合成" extra={<Text copyable={{text:JSON.stringify(trial.output_series||[],null,2)}}>复制 JSON</Text>}><Input.TextArea className="coldchain-json-textarea" value={JSON.stringify(trial.output_series||[],null,2)} readOnly autoSize={{minRows:14,maxRows:26}}/></Card>
-          {trial.stage2_request&&<Card className="section-title" size="small" title="阶段二完整请求" extra={<Text copyable={{text:JSON.stringify(trial.stage2_request,null,2)}}>复制 JSON</Text>}>
-            <Input.TextArea className="coldchain-json-textarea" value={JSON.stringify(trial.stage2_request,null,2)} readOnly autoSize={{minRows:14,maxRows:26}}/>
-          </Card>}
 
           <Card className="section-title" size="small" title="质检报告" extra={<QualityReportDownloadButton report={trial.rule_report}/>}><RuleQualityReport templateTrial showDownload={false} showClassification report={trial.rule_report||{templateId:draft?.draft_id}}/></Card>
         </Card>}

@@ -5,9 +5,9 @@ import {createConnection} from 'node:net';
 import {spawn, spawnSync} from 'node:child_process';
 
 const root = dirname(fileURLToPath(import.meta.url));
-const url = 'http://127.0.0.1:8769/';
+const url = 'http://127.0.0.1:8775/';
 const occupied = await new Promise(resolve => {
-  const socket = createConnection({host:'127.0.0.1', port:8769});
+  const socket = createConnection({host:'127.0.0.1', port:8775});
   const finish = busy => { socket.destroy(); resolve(busy); };
   socket.once('connect', () => finish(true));
   socket.once('error', () => finish(false));
@@ -23,9 +23,12 @@ if (occupied) {
   } catch {}
   if (samePortal) {
     console.log(`User portal is already running: ${url}`);
+    const opener = spawn('rundll32.exe', ['url.dll,FileProtocolHandler', url], {detached:true,stdio:'ignore',windowsHide:true});
+    opener.on('error', error => console.error(`Please open ${url} manually: ${error.message}`));
+    opener.unref();
     process.exit(0);
   }
-  console.error('Port 8769 is occupied by another service or an unresponsive portal.');
+  console.error('Port 8775 is occupied by another service or an unresponsive portal.');
   console.error('Close that service, then run start_user.cmd again.');
   process.exit(1);
 }
@@ -41,7 +44,7 @@ if (!existsSync(vite)) {
 }
 
 console.log(`User portal: ${url}`);
-const server = spawn(process.execPath,[vite],{cwd:root,stdio:'inherit'});
+const server = spawn(process.execPath,[vite,'--open'],{cwd:root,stdio:'inherit'});
 server.on('error', error => {console.error(error.message);process.exitCode=1;});
 server.on('exit', code => {process.exitCode=code ?? 0;});
 process.on('SIGINT', () => server.kill('SIGINT'));

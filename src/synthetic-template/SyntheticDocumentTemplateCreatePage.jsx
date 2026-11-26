@@ -1,7 +1,7 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import {
   Alert, Button, Card, Checkbox, Col, Descriptions, Empty, Flex, Form, Input, InputNumber,
-  Popconfirm, Row, Select, Space, Steps, Table, Tag, Typography, Upload, message,
+  Modal, Popconfirm, Row, Select, Space, Steps, Table, Tag, Typography, Upload, message,
 } from 'antd';
 import {
   ArrowLeftOutlined, ArrowRightOutlined, CheckCircleOutlined, DeleteOutlined,
@@ -13,6 +13,7 @@ import {
 } from './catalog';
 import SyntheticTemplatePreview from './SyntheticTemplatePreview';
 import { BusinessTypeSelect } from '../BusinessTypeSelect';
+import { setLeaveDirty } from '../leaveGuard';
 import './syntheticTemplate.css';
 
 import RuleQualityReport from '../RuleQualityReport';
@@ -168,6 +169,13 @@ export function SyntheticDocumentTemplateCreatePage({ onBack, onPublished }) {
     setTrial(null);
     setPublished(null);
   };
+
+  const requestClose = () => {
+    if (!dirty) { onBack(); return; }
+    Modal.confirm({ title: '有未保存的修改，确定离开吗？', content: '离开后本次未保存的修改会丢失。', okText: '放弃修改', okType: 'danger', cancelText: '继续编辑', onOk: onBack });
+  };
+
+  useEffect(()=>{setLeaveDirty(dirty);return()=>setLeaveDirty(false);},[dirty]);
 
   const changeDocumentType = value => {
     const nextType = catalog.document_types.find(item => item.value === value) || FALLBACK_CATALOG.document_types[0];
@@ -332,7 +340,7 @@ export function SyntheticDocumentTemplateCreatePage({ onBack, onPublished }) {
     { title: '数据类型', width: 132, render: (_, row) => <Select placeholder="请选择数据类型" showSearch optionFilterProp="label" value={row.data_type} options={DATA_TYPE_OPTIONS} onChange={value => changeField(row.id, { data_type: value })}/> },
     { title: '生成方式', width: 132, render: (_, row) => <Select placeholder="请选择生成方式" value={row.generator?.type} options={GENERATOR_OPTIONS} onChange={value => changeField(row.id, { generator: { type: value } })}/> },
     { title: '示例值', width: 180, render: (_, row) => <Input placeholder="请输入示例值" value={row.sample_text} onChange={event => changeField(row.id, { sample_text: event.target.value })}/> },
-    { title: '生成规则 / Prompt', render: (_, row) => <Input.TextArea placeholder="描述生成规则 / Prompt，说明目标、约束和输出要求" autoSize={{ minRows: 1, maxRows: 3 }} value={row.generator?.rule} onChange={event => changeField(row.id, { generator: { rule: event.target.value, prompt: row.generator?.type === 'llm_prompt' ? event.target.value : row.generator?.prompt } })}/> },
+    { title: '生成规则 / Prompt', render: (_, row) => <Input.TextArea placeholder="描述生成规则 / Prompt，说明目标、约束和输出要求" autoSize={{ minRows: 1, maxRows: 3 }} value={row.generator?.rule} onChange={event => changeField(row.id, { generator: { rule: event.target.value, prompt: row.generator?.type === 'llm_prompt' ? event.target.value : row.generator?.prompt } })} allowClear/> },
     { title: '必填', width: 66, align: 'center', render: (_, row) => <Switch size="small" checked={row.required} onChange={checked => changeField(row.id, { required: checked, quality_rule: { ...row.quality_rule, required: checked } })}/> },
     { title: '', width: 44, render: (_, row) => <Popconfirm title="删除字段？" description="删除后可通过重新选择文档类型恢复系统默认字段。" onConfirm={() => removeField(row.id)}><Button type="text" danger icon={<DeleteOutlined/>}/></Popconfirm> },
   ];
@@ -350,7 +358,7 @@ export function SyntheticDocumentTemplateCreatePage({ onBack, onPublished }) {
       <Card size="small" title="基本信息" className="fictional-config-card">
         <Form.Item name="name" label="模板名称" rules={[{ required: true, message: '请输入模板名称' }, { max: 80 }]}><Input placeholder="例如：国内运单虚构训练模板 V1"/></Form.Item>
         <Form.Item name="businessType" label="业务类型" rules={[{required:true,message:'请选择业务类型'}]}><BusinessTypeSelect modality="document_image"/></Form.Item>
-        <Form.Item name="description" label="模板说明" rules={[{max:500}]}><Input.TextArea placeholder="请输入模板说明" rows={2} maxLength={500} showCount/></Form.Item>
+        <Form.Item name="description" label="模板说明" rules={[{max:500}]}><Input.TextArea placeholder="请输入模板说明" rows={2} maxLength={500} showCount allowClear/></Form.Item>
         <div className="fictional-field-label">文档类型</div>
         <div className="fictional-type-grid">{catalog.document_types.map(item => <Card key={item.value} hoverable size="small" onClick={() => changeDocumentType(item.value)} className={`fictional-choice-card ${documentType === item.value ? 'is-selected' : ''}`}><Text strong>{item.label}</Text><Paragraph type="secondary">{item.description}</Paragraph><Tag>{item.canvas?.width}×{item.canvas?.height}</Tag></Card>)}</div>
         {documentType === 'contract' && <Form.Item name="contentSubtype" label="合同内容类型" rules={[{ required: true }]}><Select placeholder="请选择合同内容类型" options={subtypeOptions} onChange={changeSubtype}/></Form.Item>}
@@ -397,21 +405,25 @@ export function SyntheticDocumentTemplateCreatePage({ onBack, onPublished }) {
 
   return <div className="template-create-page fictional-template-page">
     <Flex className="page-header" justify="space-between" align="flex-start">
-      <Space align="start"><Button type="text" icon={<LeftOutlined/>} aria-label="返回模板中心" onClick={onBack}/><div><Title level={2}>新建文档类图像模板</Title><Paragraph type="secondary">底图生成法：使用平台生成的安全底图、虚构视觉资产和业务字段制作模板</Paragraph></div></Space>
-      <Space><Button onClick={onBack}>取消</Button>{draftId && <Tag color="blue">{draftId}</Tag>}<Button icon={<SaveOutlined/>} loading={action === 'save'} disabled={!dirty || Boolean(published)} onClick={save}>保存草稿</Button></Space>
+      <Space align="start"><Button type="text" icon={<LeftOutlined/>} aria-label="返回模板中心" onClick={requestClose}/><div><Title level={2}>新建文档类图像模板</Title><Paragraph type="secondary">底图生成法：使用平台生成的安全底图、虚构视觉资产和业务字段制作模板</Paragraph></div></Space>
     </Flex>
-    {serviceError && <Alert className="fictional-service-alert" type="warning" showIcon message="本地 Mock 数据读取失败" description={`${serviceError}。刷新页面可重新加载内置示例。`}/>} 
-    {serviceReady && <Alert className="fictional-service-alert" type="success" showIcon message="纯前端 Mock 模式已就绪" description="版式、字段规则、试运行图片、Ground Truth 与质检结果保存在当前浏览器。"/>}
-    <Card className="main-card fictional-workflow-card">
-      <Flex justify="space-between" align="center" className="template-editor-step-actions template-editor-step-actions-top">
-        <Button icon={<ArrowLeftOutlined/>} disabled={step === 0 || Boolean(published)} onClick={() => setStep(value => Math.max(0, value - 1))}>返回上一步</Button>
+    <Flex justify="space-between" align="center" wrap="wrap" gap={12} className="conversation-template-statusbar template-editor-step-actions-top">
+      <Text type="secondary">{draftId ? `ID：${draftId}` : ''}</Text>
+      <Space wrap>
+        <Button onClick={requestClose}>取消</Button>
+        <Button icon={<ArrowLeftOutlined/>} disabled={step === 0 || Boolean(published)} onClick={() => setStep(value => Math.max(0, value - 1))}>上一步</Button>
+        <Button icon={<SaveOutlined/>} loading={action === 'save'} onClick={save}>保存草稿</Button>
         {step < STEP_ITEMS.length - 1
           ? <Button type="primary" icon={<ArrowRightOutlined/>} onClick={next}>下一步</Button>
           : <Space>
             <Button icon={<ExperimentOutlined/>} loading={action === 'trial'} disabled={Boolean(published)} onClick={runTrial}>试运行 1 张并质检</Button>
             <Button type="primary" icon={<SafetyCertificateOutlined/>} loading={action === 'publish'} disabled={!trial || dirty || trial.status === 'REJECT' || Boolean(published)} onClick={publish}>发布模板</Button>
           </Space>}
-      </Flex>
+      </Space>
+    </Flex>
+    {serviceError && <Alert className="fictional-service-alert" type="warning" showIcon message="本地 Mock 数据读取失败" description={`${serviceError}。刷新页面可重新加载内置示例。`}/>} 
+    {serviceReady && <Alert className="fictional-service-alert" type="success" showIcon message="纯前端 Mock 模式已就绪" description="版式、字段规则、试运行图片、Ground Truth 与质检结果保存在当前浏览器。"/>}
+    <Card className="main-card fictional-workflow-card">
       <Steps current={step} items={STEP_ITEMS} onChange={value => value <= step && setStep(value)} className="template-editor-steps"/>
       <Form form={form} layout="vertical" initialValues={INITIAL_VALUES} onValuesChange={(_, allValues) => { setValues(current => ({ ...current, ...allValues })); markChanged(); }}>
         <Form.Item name="documentType" hidden rules={[{ required:true }]}><Input/></Form.Item>

@@ -1,7 +1,7 @@
 import React, {createContext, useContext, useEffect, useId, useRef, useState} from 'react';
 import {createPortal} from 'react-dom';
 import {Button} from 'antd';
-import {ArrowLeftOutlined} from '@ant-design/icons';
+import {ArrowLeftOutlined, LeftOutlined} from '@ant-design/icons';
 
 const Workspace = createContext(null);
 
@@ -23,7 +23,7 @@ export function DetailWorkspace({children}) {
 
 // Full-width detail navigation. Underlying views keep their filters and scroll position.
 // Only the current page is exposed; a rule sample may still use the one remaining drawer.
-export default function DetailPage({open, title, onClose, children}) {
+export default function DetailPage({open, title, onClose, backIconOnly = false, children}) {
   const id = useId();
   const context = useContext(Workspace);
   const button = useRef(null);
@@ -45,7 +45,9 @@ export default function DetailPage({open, title, onClose, children}) {
   if (!open) return null;
   return createPortal(<section className="ued-detail-page" hidden={!top} aria-label={typeof title === 'string' ? title : '来源任务详情'}>
     <header className="ued-detail-heading">
-      <Button ref={button} type="text" icon={<ArrowLeftOutlined/>} onClick={onClose}>返回</Button>
+      {backIconOnly
+        ? <Button ref={button} type="text" shape="circle" icon={<LeftOutlined/>} aria-label="返回" onClick={onClose}/>
+        : <Button ref={button} type="text" icon={<ArrowLeftOutlined/>} onClick={onClose}>返回</Button>}
       <div className="ued-detail-heading-title">{title}</div>
     </header>
     <div className="ued-detail-body">{children}</div>

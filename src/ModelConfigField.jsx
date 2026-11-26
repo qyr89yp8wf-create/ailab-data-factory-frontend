@@ -21,12 +21,12 @@ export function FormModelConfig({form,modelName,parameterSwitchName,parameterNam
   return <ModelConfigField label={label} help={help} required={required}
     model={<Form.Item name={modelName} initialValue={initialModel} rules={required?[{required:true,message:`请选择${label}`}]:[]}><Select placeholder={`请选择${label}`} aria-label={label} disabled={disabled} options={options}/></Form.Item>}
     toggle={<Form.Item name={parameterSwitchName} valuePropName="checked" noStyle><Switch aria-label={`${label}自定义参数`} disabled={disabled}/></Form.Item>}
-    parameters={enabled&&<Form.Item name={parameterName} preserve rules={[{validator:(_,value)=>{const error=modelParametersError(value,allowEmpty);return error?Promise.reject(new Error(error)):Promise.resolve();}}]}><Input.TextArea placeholder={'请输入 JSON 对象，如 {"temperature":0.7}'} aria-label={`${label}参数 JSON`} rows={5} spellCheck={false} disabled={disabled}/></Form.Item>}/>
+    parameters={enabled&&<Form.Item name={parameterName} preserve rules={[{validator:(_,value)=>{const error=modelParametersError(value,allowEmpty);return error?Promise.reject(new Error(error)):Promise.resolve();}}]}><Input.TextArea placeholder={'请输入 JSON 对象，如 {"temperature":0.7}'} aria-label={`${label}参数 JSON`} rows={5} spellCheck={false} disabled={disabled} allowClear/></Form.Item>} allowClear/>
 }
 export function ControlledModelConfig({label,options,value,onChange,enabled,onEnabledChange,parameters,onParametersChange,help='关闭后不传递自定义参数，使用模型默认参数。',disabled}){
   const error=enabled?modelParametersError(parameters):null;
   return <ModelConfigField label={label} help={help}
     model={<Select placeholder={`请选择${label}`} aria-label={label} style={{width:'100%'}} value={value} onChange={onChange} options={options} disabled={disabled}/>}
     toggle={<Switch aria-label={`${label}自定义参数`} checked={enabled} onChange={onEnabledChange} disabled={disabled}/>}
-    parameters={enabled&&<><Input.TextArea placeholder={'请输入 JSON 对象，如 {"temperature":0.7}'} aria-label={`${label}参数 JSON`} aria-invalid={!!error} status={error?'error':undefined} rows={5} spellCheck={false} value={parameters} onChange={e=>onParametersChange(e.target.value)} disabled={disabled}/>{error&&<div className="model-config-error" role="alert">{error}</div>}</>}/>
+    parameters={enabled&&<><Input.TextArea placeholder={'请输入 JSON 对象，如 {"temperature":0.7}'} aria-label={`${label}参数 JSON`} aria-invalid={!!error} status={error?'error':undefined} rows={5} spellCheck={false} value={parameters} onChange={e=>onParametersChange(e.target.value)} disabled={disabled} allowClear/>{error&&<div className="model-config-error" role="alert">{error}</div>}</>} allowClear/>
 }

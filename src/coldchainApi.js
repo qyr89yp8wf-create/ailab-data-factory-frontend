@@ -1,3 +1,4 @@
+import {sampleConstantValues,valueMode} from './timeSeriesValueModes.js';
 import { csvDataUrl, id, jsonDataUrl, loadSeed, mockResult, now, readStore, textDataUrl, updateStore } from './mockStore';
 import { COLDCHAIN_MODEL_CONFIGURATION } from './timeSeriesModelSeed';
 import { compileStage1, compileStage2, DEMO_FROZEN_EVENT, PREVIEW_RUNTIME, validateEventResult } from './timeSeriesPromptCompiler';
@@ -17,7 +18,7 @@ async function officialTemplate() {
     template_id: raw.template_id || 'COLDTPL-REEFER-INTL-MVP',
     name: raw.name || configuration.name || '冷藏集装箱国际运输（MVP）',
     description: raw.description || configuration.description || '冷链运输时序数据模板',
-    business_type: raw.business_type || configuration.business_type || '冷藏集装箱物流',
+    business_type: raw.business_type || configuration.business_type || '温湿度时序数据',
     status: 'enabled', scope: raw.scope || 'official', version: raw.version || selected.version || 'V1', version_count: raw.versions?.length || 1,
     generation_rule_count: raw.generation_rule_count || (configuration.fields || []).reduce((sum, field) => sum + (field.generation_rules?.length || 0), 0) || 10,
     quality_rule_count: raw.quality_rule_count || (configuration.fields || []).reduce((sum, field) => sum + (field.quality_rules?.length || 0), 0) || 10,
@@ -41,28 +42,30 @@ function trialFor(draft, payload = {}) {
   const fields = (draft.configuration?.fields || []).filter(field => field.enabled !== false);
   const numericFields = fields.filter(field => ['number', 'integer'].includes(field.type));
   const baseValues = { temperature_setpoint: 4, ambient_temperature:25, supply_air_temperature:2, return_air_temperature:4, cargo_temperature:4.5, relative_humidity:65, latitude:30, longitude:120, return_air_temperature_observed:4.02 };
+  const constants=sampleConstantValues(fields);
   const startAt = new Date('2026-09-08T08:00:00+08:00');
   const series = Array.from({ length: stepCount }, (_, index) => {
     const timestamp = new Date(startAt.getTime() + index * intervalMinutes * 60000).toISOString().replace('T', ' ').slice(0, 19);
     const ratio = index / Math.max(1, stepCount - 1);
     const eventActive=index>=Math.floor(stepCount/3)&&index<Math.floor(stepCount/3)+Math.max(1,Math.round(30/intervalMinutes));
-    const row = { index, timestamp, power_status:1, transport_stage:index<stepCount/4?'road':index<stepCount/2?'port':'sea', active_event_type:eventActive?'door_open':'normal', network_status:'online' };
+    const row = { index, timestamp };
+    fields.filter(f=>!['number','integer'].includes(f.type)).forEach(f=>{row[f.field_id]=f.enum_values?.[0]??'';});
     numericFields.forEach((field, fieldIndex) => {
       const base = baseValues[field.field_id] ?? (fieldIndex + 1) * 8;
       const wave = field.field_id==='temperature_setpoint'?0:Math.sin(index / (5 + fieldIndex)) * (field.field_id === 'relative_humidity' ? 1.5 : 0.08);
       const eventPulse = ratio > 0.32 && ratio < 0.55 && ['supply_air_temperature','return_air_temperature','cargo_temperature','return_air_temperature_observed'].includes(field.field_id) ? Math.sin((ratio - 0.32) / 0.23 * Math.PI) * (field.field_id==='cargo_temperature'?0.4:2) : 0;
       row[field.field_id] = Number((base + wave + eventPulse).toFixed(['latitude','longitude'].includes(field.field_id)?6:2));
     });
-    return row;
+    return {...row,...constants};
   });
-  const gpsTrack = Array.from({ length: stepCount }, (_, index) => {
+  const gpsTrack = fields.some(f=>f.field_id==='latitude')&&fields.some(f=>f.field_id==='longitude')?Array.from({ length: stepCount }, (_, index) => {
     const ratio = index / Math.max(1, stepCount - 1);
     return { timestamp: series[index].timestamp, longitude: Number((121.47 - ratio * 116.98 + Math.sin(index / 8) * 0.35).toFixed(5)), latitude: Number((31.23 + ratio * 20.69 + Math.sin(index / 11) * 0.22).toFixed(5)) };
-  });
+  }):[];
   const runtime={...PREVIEW_RUNTIME,point_count:stepCount,step_minutes:intervalMinutes,duration_minutes:stepCount*intervalMinutes};
   const assignment={selected_values:[{dimension_id:'event_type',dimension_name:'事件类型',option_id:'door_open',option_name:'开门'},{dimension_id:'primary_event_stage',dimension_name:'主要事件发生阶段',option_id:'port',option_name:'港口等待'},{dimension_id:'cargo_type',dimension_name:'货物类型',option_id:'chilled_goods',option_name:'冷藏货物'},{dimension_id:'environment',dimension_name:'环境条件',option_id:'mild_warm',option_name:'常规温暖环境'}],not_applicable_dimensions:[]};
   let compiledStage1=null;let compiledStage2=null;let generatedEvent=DEMO_FROZEN_EVENT;
-  try{compiledStage1=compileStage1(draft.configuration,assignment,runtime);const checkedEvent=validateEventResult({status:'ok',event:DEMO_FROZEN_EVENT},draft.configuration,assignment,runtime);generatedEvent=checkedEvent.event;compiledStage2=compileStage2(draft.configuration,runtime,{assignment,event:generatedEvent});}catch{/* 旧草稿继续使用本地试运行兜底 */}
+  try{compiledStage1=compileStage1(draft.configuration,assignment,runtime);compiledStage1.userInput.constant_values={...constants};compiledStage1.userText=JSON.stringify(compiledStage1.userInput,null,2);compiledStage1.messages[1].content=compiledStage1.userText;const event=structuredClone(DEMO_FROZEN_EVENT);event.initial_values=Object.fromEntries(fields.map(f=>[f.field_id,series[0][f.field_id]]));if(!gpsTrack.length)delete event.route_plan;const checkedEvent=validateEventResult({status:'ok',event},draft.configuration,assignment,runtime);generatedEvent=checkedEvent.event;compiledStage2=compileStage2(draft.configuration,runtime,{assignment,event:generatedEvent});}catch{/* 旧草稿继续使用本地试运行兜底 */}
   const requestMeta={request_preview:true,model:payload.model_alias||null,generation_parameters:payload.generation_parameters??null};
   const stage1Request=compiledStage1?{...requestMeta,messages:compiledStage1.messages}:null;
   const stage2Request=compiledStage2?{...requestMeta,messages:compiledStage2.messages}:null;
@@ -142,7 +145,7 @@ export const coldchainApi = {
   },
   validateTemplate: configuration => mockResult({ valid: true, configuration, errors: [], warnings: [] }),
   createTemplate: configuration => {
-    const item = { template_id: id('COLDTPL'), name: configuration.name, description: configuration.description, business_type: configuration.business_type || '冷藏集装箱物流', status: 'enabled', scope: 'custom', version: 'V1', version_count: 1, parameter_count: configuration.fields?.length || 0, generation_rule_count: (configuration.fields || []).reduce((sum, field) => sum + (field.generation_rules?.length || 0), 0), quality_rule_count: (configuration.fields || []).reduce((sum, field) => sum + (field.quality_rules?.length || 0), 0), coverage_profile_count: configuration.coverage?.profiles?.length || 0, configuration, created_at: now(), updated_at: now() };
+    const item = { template_id: id('COLDTPL'), name: configuration.name, description: configuration.description, business_type: configuration.business_type || '温湿度时序数据', status: 'enabled', scope: 'custom', version: 'V1', version_count: 1, parameter_count: configuration.fields?.length || 0, generation_rule_count: (configuration.fields || []).reduce((sum, field) => sum + (field.generation_rules?.length || 0), 0), quality_rule_count: (configuration.fields || []).reduce((sum, field) => sum + (field.quality_rules?.length || 0), 0), coverage_profile_count: configuration.coverage?.profiles?.length || 0, configuration, created_at: now(), updated_at: now() };
     updateStore(TEMPLATE_STORE, [], values => [item, ...values]);
     return mockResult(item);
   },
@@ -150,7 +153,7 @@ export const coldchainApi = {
     let drafts = readStore(DRAFT_STORE, []);
     if (!drafts.length) {
       const seed = await officialTemplate();
-      const configuration = { ...seed.configuration, name:'冷链运输异常事件模板（草稿）', description:'用于配置异常事件、输出参数及质检规则的时序模板草稿', business_type:'冷藏集装箱物流', scope:'custom' };
+      const configuration = { ...seed.configuration, name:'冷链运输异常事件模板（草稿）', description:'用于配置异常事件、输出参数及质检规则的时序模板草稿', business_type:'温湿度时序数据', scope:'custom' };
       const draft = { draft_id:'COLDDRAFT-20260903-A81C2F', status:'draft', revision:3, configuration, name:configuration.name, description:configuration.description, business_type:configuration.business_type, field_count:configuration.fields?.length||10, coverage_profile_count:configuration.coverage?.profiles?.length||6, trial_status:'PASS', validation:{valid:true}, trial_run:{status:'PASS'}, created_at:'2026-09-03 09:00:00', updated_at:'2026-09-03 09:30:00' };
       updateStore(DRAFT_STORE, [], () => [draft]);
       drafts = [draft];
@@ -168,7 +171,7 @@ export const coldchainApi = {
     let saved;
     updateStore(DRAFT_STORE, [], values => values.map(item => {
       if (item.draft_id !== draftId) return item;
-      saved = { ...item, configuration, name: configuration.name, description: configuration.description, business_type: configuration.business_type || item.business_type || '冷藏集装箱物流', revision: Number(item.revision || 0) + 1, validation: null, trial_run: item.trial_run || null, updated_at: now() };
+      saved = { ...item, configuration, name: configuration.name, description: configuration.description, business_type: configuration.business_type || item.business_type || '温湿度时序数据', revision: Number(item.revision || 0) + 1, validation: null, trial_run: item.trial_run || null, updated_at: now() };
       return saved;
     }));
     return mockResult(saved);
@@ -185,7 +188,7 @@ export const coldchainApi = {
     const draft = readStore(DRAFT_STORE, []).find(item => item.draft_id === draftId);
     if(!draft)throw new Error('该时序模板草稿不存在或已经发布，请刷新模板中心');
     const config = draft?.configuration || {};
-    const item = { template_id: id('COLDTPL'), name: config.name || '新建时序模板', description: config.description || '', business_type: config.business_type || '冷藏集装箱物流', status: 'enabled', scope: 'custom', version: 'V1', version_count: 1, parameter_count: config.fields?.length || 0, generation_rule_count: (config.fields || []).reduce((sum, field) => sum + (field.generation_rules?.length || 0), 0), quality_rule_count: (config.fields || []).reduce((sum, field) => sum + (field.quality_rules?.length || 0), 0), coverage_profile_count: config.coverage?.profiles?.length || 0, configuration: config, trial_status: draft?.trial_run?.status || 'PASS', created_at: now(), updated_at: now() };
+    const item = { template_id: id('COLDTPL'), name: config.name || '新建时序模板', description: config.description || '', business_type: config.business_type || '温湿度时序数据', status: 'enabled', scope: 'custom', version: 'V1', version_count: 1, parameter_count: config.fields?.length || 0, generation_rule_count: (config.fields || []).reduce((sum, field) => sum + (field.generation_rules?.length || 0), 0), quality_rule_count: (config.fields || []).reduce((sum, field) => sum + (field.quality_rules?.length || 0), 0), coverage_profile_count: config.coverage?.profiles?.length || 0, configuration: config, trial_status: draft?.trial_run?.status || 'PASS', created_at: now(), updated_at: now() };
     updateStore(TEMPLATE_STORE, [], values => [item, ...values]);
     updateStore(DRAFT_STORE, [], values => values.filter(value => value.draft_id !== draftId));
     return mockResult({ published_template: item }, 240);

@@ -2,12 +2,14 @@ import { id, loadSeed, mockResult, now, readStore, textDataUrl, updateStore } fr
 
 import {templateRulesSnapshot} from './templateQualitySnapshot.js';
 import {trialQualityReport,templateLabelSnapshot} from './qualityResults.js';
+import {renderPackingList,packingListChecks} from './packingListTrial.js';
+import {upgradeHandwritingDraft,validateHandwriting} from './handwriting.js';
 const JOB_STORE = 'document-template-jobs';
 const DRAFT_STORE = 'document-template-drafts';
 const TEMPLATE_STORE = 'document-templates';
 const base = import.meta.env.BASE_URL;
-const seedImage = `${base}mock-data/document-seed.jpg`;
-const trialImage = `${base}mock-data/document-trial.png`;
+const seedImage = `${base}mock-data/packing-list.png`;
+const trialImage = `${base}mock-data/packing-list.png`;
 
 async function seedPair() {
   const [job, draft] = await Promise.all([loadSeed('document-job.json'), loadSeed('document-draft.json')]);
@@ -28,7 +30,7 @@ async function jobById(jobId) {
 
 async function draftById(jobId) {
   const stored = readStore(DRAFT_STORE, {})[jobId];
-  if (stored) return stored;
+  if (stored) return upgradeHandwritingDraft(stored);
   const { job, draft } = await seedPair();
   if (job.id === jobId) return draft;
   throw new Error('没有找到该模板草稿');
@@ -64,7 +66,7 @@ export const templateApi = {
   listJobs: async () => {
     const { job } = await seedPair();
     const stored = readStore(JOB_STORE, []);
-    return mockResult({ items: [job, ...stored.filter(item => item.id !== job.id)] });
+    return mockResult({ items: [stored.find(item=>item.id===job.id)||job, ...stored.filter(item => item.id !== job.id)] });
   },
   getJob: async jobId => mockResult(await jobById(jobId)),
   getDraft: async jobId => mockResult(await draftById(jobId)),
@@ -77,6 +79,7 @@ export const templateApi = {
   },
   validate: async jobId => {
     const current = await draftById(jobId);
+    validateHandwriting(current);
     const validation = { schema_version: 'template-validation/mock-v1', valid: true, checked_at: now(), checked_revision: current.revision, summary: { errors: 0, warnings: 0 }, issues: [] };
     const draft = { ...current, validation, workflow_state: 'validated', updated_at: now() };
     const existing = await jobById(jobId);
@@ -116,29 +119,38 @@ export const templateApi = {
   },
   restoreSystemDraft: async jobId => {
     const { draft: seedDraft } = await seedPair();
-    const draft = { ...seedDraft, source: { ...seedDraft.source, job_id: jobId }, updated_at: now() };
+    const draft = { ...seedDraft, name, business_type: businessType, source: { ...seedDraft.source, job_id: jobId }, updated_at: now() };
     const job = { ...(await jobById(jobId)), updated_at: now() };
     saveDraft(jobId, draft); saveJob(job);
     return mockResult({ draft, job });
   },
   trialRun: async jobId => {
     const current = await draftById(jobId);
-    const trial = { revision: current.revision, created_at: now(), image: trialImage, quality_report: textDataUrl('# 模板试运行质检\n\n所有阻断项均已通过。', 'text/markdown;charset=utf-8'), quality_status: 'PASS', quality_summary: { checks: 36, passed: 36, review: 0, rejected: 0 }, quality_metrics: { polygon_valid_rate: 1, dynamic_field_height_median: 24, text_overflow_count: 0 }, output_size: { width: 2480, height: 1754 }, transform: { scale: 1, mode: 'uniform_fit' }, field_generation: { status: 'completed', model: 'frontend-mock', field_count: current.fields.length, model_calls: 1, usage: { total_tokens: 2680 } } };
+    const trial = { revision: current.revision, created_at: now(), image: trialImage, quality_report: textDataUrl('# 模板试运行质检\n\n所有阻断项均已通过。', 'text/markdown;charset=utf-8'), quality_status: 'PASS', quality_summary: { checks: 36, passed: 36, review: 0, rejected: 0 }, quality_metrics: { polygon_valid_rate: 1, dynamic_field_height_median: 24, text_overflow_count: 0 }, output_size: { ...current.canvas }, transform: { scale: 1, mode: 'uniform_fit' }, field_generation: { status: 'completed', model: 'frontend-mock', field_count: current.fields.length, model_calls: 1, usage: { total_tokens: 2680 } } };
+    trial.image=await renderPackingList(current);
+    trial.output_size={...(current.render_profile?.output_size||current.canvas)};
     trial.annotation={mock:true,coordinate_space:"template_source",canvas:structuredClone(current.canvas),cells:structuredClone(current.cells||[]),texts:structuredClone(current.texts||[]),assets:structuredClone(current.assets||[]),fields:structuredClone(current.fields||[])};
     trial.rule_report=trialQualityReport(templateRulesSnapshot('文档图像',current),{sampleCount:current.trial_config?.sample_count||1,labels:templateLabelSnapshot(current,'文档图像'),templateId:jobId,templateVersion:String(current.revision)});
+    const checks=packingListChecks(current),rules=templateRulesSnapshot('文档图像',current);
+    const results=rules.filter(r=>r.resultType!=='statistics').map(r=>({id:r.id,name:r.name,status:checks[r.id]===false?'FAIL':'PASS',score:checks[r.id]===false?0:1,reason:checks[r.id]===false?r.failCriteria:checks[r.id]===true?'装箱单样例字段校验通过':'前端演示模拟通过（未调用真实检测器）',objects:[]}));
+    trial.rule_report=trialQualityReport(rules,{sampleCount:1,samples:[{sampleId:'PACKING-TRIAL-0001',ruleResults:results}],labels:templateLabelSnapshot(current,'文档图像'),templateId:jobId,templateVersion:String(current.revision)});
+    const rejected=results.filter(r=>r.status==='FAIL').length;
+    trial.quality_status=rejected?'REJECT':'PASS';
+    trial.quality_summary={checks:results.length,passed:results.length-rejected,review:0,rejected};
+    trial.quality_report=textDataUrl('# 装箱单试运行质检\n\n'+results.map(r=>`${r.name}：${r.status} — ${r.reason}`).join('\n\n'),'text/markdown;charset=utf-8');
     const draft = { ...current, trial_run: trial, validation: current.validation?.valid ? current.validation : { valid: true, checked_revision: current.revision }, workflow_state: 'trial_completed', updated_at: now() };
     const existing = await jobById(jobId);
-    const job = { ...existing, updated_at: now(), last_trial: { status: 'PASS', created_at: now() }, result: { ...existing.result, draft_status: 'trial_completed', trial_quality_status: 'PASS', draft_revision: draft.revision } };
+    const job = { ...existing, updated_at: now(), last_trial: { status: trial.quality_status, created_at: now() }, result: { ...existing.result, draft_status: 'trial_completed', trial_quality_status: trial.quality_status, draft_revision: draft.revision } };
     saveDraft(jobId, draft); saveJob(job);
-    return mockResult({ draft, job, quality: { status: 'PASS' } }, 520);
+    return mockResult({ draft, job, quality: { status: trial.quality_status } }, 520);
   },
-  listTemplates: () => mockResult({ items: [{ template_id: 'DOC-TPL-SYS-CUSTOMS-MOCK', name: '进口货物报关单模板', business_type: '报关单', status: 'enabled', version: 'V1', version_count: 1, source_job_id: 'TEMPLATE-DOC-20260831-181911-99CC', cell_count: 35, field_count: 72, scope: 'official', created_at: '2026-08-31 10:00:00', updated_at: '2026-08-31 10:00:00' }, ...readStore(TEMPLATE_STORE, [])] }),
-  createJob: async ({ existingJobId, file, name, taskType, businessType, imgsz, conf, semanticModel }) => {
+  listTemplates: () => mockResult({ items: [{ template_id: 'DOC-TPL-SYS-PACKING-MOCK', name: '装箱单模板', business_type: '装箱单', status: 'enabled', version: 'V1', version_count: 1, source_job_id: 'TEMPLATE-DOC-20260831-181911-99CC', cell_count: 21, field_count: 14, scope: 'official', created_at: '2026-08-31 10:00:00', updated_at: '2026-08-31 10:00:00' }, ...readStore(TEMPLATE_STORE, [])] }),
+  createJob: async ({ existingJobId, file, name, taskType, businessType, imgsz, conf, semanticModel, semanticPrompt, semanticParameters }) => {
     const { job: seedJob, draft: seedDraft } = await seedPair();
     const jobId = existingJobId || id('TEMPLATE-DOC');
     const objectUrl = seedImage;
-    const job = { ...seedJob, id: jobId, name, task_type: taskType, business_type: businessType, status: 'completed', progress: 100, created_at: now(), updated_at: now(), parameters: { imgsz, conf, semantic_model: semanticModel }, input: { ...(seedJob.input || {}), original_filename: file?.name || 'mock-seed.jpg' }, artifact_urls: { ...(seedJob.artifact_urls || {}), input: objectUrl }, result: { ...(seedJob.result || {}), semantic_status: 'completed', draft_status: 'ready_for_trial', published_template: null } };
-    const draft = { ...seedDraft, source: { ...(seedDraft.source || {}), job_id: jobId, original_filename: file?.name || 'mock-seed.jpg' }, validation: null, trial_run: null, workflow_state: 'draft_saved', updated_at: now() };
+    const job = { ...seedJob, id: jobId, name, task_type: taskType, business_type: businessType, status: 'completed', progress: 100, created_at: now(), updated_at: now(), parameters: { imgsz, conf, semantic_model: semanticModel, semantic_prompt: semanticPrompt, semantic_parameters: semanticParameters }, input: { ...(seedJob.input || {}), original_filename: file?.name || 'mock-seed.jpg' }, artifact_urls: { ...(seedJob.artifact_urls || {}), input: objectUrl }, result: { ...(seedJob.result || {}), semantic_status: 'completed', draft_status: 'ready_for_trial', published_template: null } };
+    const draft = { ...seedDraft, name, business_type: businessType, source: { ...(seedDraft.source || {}), job_id: jobId, original_filename: file?.name || 'mock-seed.jpg' }, validation: null, trial_run: null, workflow_state: 'draft_saved', updated_at: now() };
     saveDraft(jobId, draft); saveJob(job);
     return mockResult(job, 620);
   },
@@ -147,7 +159,10 @@ export const templateApi = {
     const publishedId = existing.result?.published_template?.template_id;
     const published = readStore(TEMPLATE_STORE, []).find(item => item.template_id === publishedId || item.source_job_id === jobId);
     if(published)return mockResult({job:existing,template:published},260);
+    const current=await draftById(jobId);
+    if(current.trial_run?.revision!==current.revision||current.trial_run?.quality_status!=='PASS')throw new Error('请先完成当前草稿的试运行并通过装箱单质检');
     const template = { template_id: id('DOC-TPL'), name: existing.name, business_type: existing.business_type, version: 'V1', version_count: 1, source_job_id: jobId, cell_count: existing.result?.cell_count || 0, field_count: existing.result?.field_count || 0, scope: 'custom', created_at: now(), updated_at: now() };
+    Object.assign(template,{cell_count:current.cells.length,field_count:current.fields.length,configuration:structuredClone(current)});
     const job = { ...existing, updated_at: now(), result: { ...existing.result, published_template: template, draft_status: 'published' } };
     saveJob(job); updateStore(TEMPLATE_STORE, [], values => [template, ...values.filter(item=>item.source_job_id!==jobId)]);
     return mockResult({ job, template }, 260);

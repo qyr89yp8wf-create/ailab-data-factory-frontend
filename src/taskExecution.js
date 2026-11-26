@@ -131,7 +131,7 @@ export function advanceExecution(task){
   const execution={...task.execution,tick,processed};
   const executionSummary=summarizeExecution({...task,execution},processed);
   const finished=tick>=12||task.execution.fixture==='config-error';
-  const status=finished?(executionSummary.succeededSampleCount===0||task.execution.fixture==='config-error'?'异常':'已完成'):'运行中';
+  const status=finished?(executionSummary.succeededSampleCount===0||task.execution.fixture==='config-error'?'失败':'已完成'):'运行中';
   return {...task,execution,executionSummary,status,updated:stamp(Date.now()),progress:planned?Math.round(processed/planned*100):0,currentStage:finished?'执行结束':tick%3===1?'样本处理中':tick%3===2?'异常请求重试中':'样本结果写入中',apiUsage:{model:executionSummary.modelAttemptCount,image:executionSummary.imageAttemptCount,tokens:null}};
 }
 export function stopExecution(task){return {...task,status:'已终止',currentStage:'用户终止',updated:stamp(Date.now()),output:'未提交正式版本'};}

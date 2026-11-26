@@ -1,5 +1,6 @@
 import {FormQualityEditor} from './UnifiedQualityEditor';
 import {qualityConfig} from './qualityCatalog';
+import {setLeaveDirty} from './leaveGuard';
 import {FormModelConfig,ModelConfigField,ModelConfigGroup} from './ModelConfigField';
 import PrivacyPolicyEditor,{validatePrivacyPolicy,privacyFieldOptions} from './PrivacyPolicyEditor';
 import React, { useEffect, useMemo, useState } from 'react';
@@ -9,8 +10,8 @@ import {
   Spin, Steps, Switch, Table, Tabs, Tag, Tooltip, Typography, message,
 } from 'antd';
 import {
-  ApiOutlined, ArrowLeftOutlined, ArrowRightOutlined, CheckCircleOutlined, LeftOutlined,
-  CopyOutlined, DeleteOutlined, EditOutlined, FileTextOutlined, PlusOutlined,
+  ApiOutlined, ArrowLeftOutlined, ArrowRightOutlined, CheckCircleOutlined, DownOutlined, LeftOutlined,
+  CopyOutlined, DeleteOutlined, EditOutlined, FileTextOutlined, PlayCircleOutlined, PlusOutlined,
   ReloadOutlined, SafetyCertificateOutlined, SaveOutlined, ToolOutlined,
 } from '@ant-design/icons';
 import { conversationApi } from './conversationApi';
@@ -168,10 +169,10 @@ const DEFAULT_SCENARIO_RULES = QUALITY_PRESETS.filter(item => ['DINGO_FAITHFULNE
 const INITIAL_VALUES = {
   ...CONVERSATION_INITIAL_VALUES,
   customPlanFields: [],
-  name: '物流智能客服对话模板',
-  description: '用于合成物流咨询多轮对话，覆盖物流状态查询、运输时效、运费与包装咨询，以及延误、物流停滞等异常问题，训练客服的信息追问、工具调用、结果解释和问题处理能力。',
+  name: '',
+  description: '',
   businessType: '咨询问答',
-  knowledgeEnabled: true,
+  knowledgeEnabled: false,
   knowledgeUsageInstructions: `根据本条咨询子场景选择适用知识。一般业务规则依据知识卡解释，具体运单状态依据工具查询结果判断。
 
 知识卡未提供的费用、时效承诺、异常原因及办理渠道不得自行补充。知识规则与查询结果用途不同，不得用一般规则推断某个运单的实际状态。`,
@@ -198,10 +199,10 @@ const INITIAL_VALUES = {
 适用范围：包装要求咨询。
 业务规则：普通物品应使用完好且强度适当的外包装，填充空隙并牢固封口。易碎物品应单独缓冲包裹，避免直接接触箱壁。液体、危险品及其他特殊物品需另行核实寄递限制，本示例不提供其可寄承诺。
 处理建议：根据物品种类说明适用要求；物品类型不明确且影响判断时，先询问。`,
-  toolsEnabled: true,
+  toolsEnabled: false,
   toolMode: 'agent_trace',
   toolCatalog: [{ ...DEFAULT_TOOL }],
-  fewShotEnabled: true,
+  fewShotEnabled: false,
   fewShotDialogueJsonl: '{"messages":[{"role":"user","content":"寄陶瓷杯要怎么包装？"},{"role":"assistant","content":"建议将杯子单独用缓冲材料包裹，放入强度适当的纸箱，再填满空隙，避免杯子直接接触箱壁，最后牢固封口。"}]}',
   fewShotKnowledgeJsonl: '',
   fewShotToolJsonl: '{"messages":[{"role":"user","content":"我的快递怎么还没到，能查一下吗？"},{"role":"assistant","content":"请提供运单号，我帮您查询运输情况。"},{"role":"user","content":"SYN2026000001。"},{"role":"assistant","content":null,"tool_calls":[{"id":"call_demo_001","type":"function","function":{"name":"query_shipment","arguments":"{\\"shipment_id\\":\\"SYN2026000001\\"}"}}]},{"role":"tool","tool_call_id":"call_demo_001","content":"{\\"shipment_id\\":\\"SYN2026000001\\",\\"status\\":\\"运输中\\",\\"last_update_time\\":\\"2026-09-07T10:00:00+08:00\\",\\"exception_type\\":\\"运输延误\\",\\"known_reason\\":\\"天气影响\\"}"},{"role":"assistant","content":"查询结果显示，包裹仍在运输中，因天气影响出现延误，最近一次更新时间是9月7日上午10点。目前查询结果没有提供预计送达时间，暂时无法确认哪天到达。"}]}',
@@ -529,7 +530,7 @@ function valuesFromDetail(detail) {
 
 function MarkdownField({ name, label, description, rows = 6, required = true }) {
   return <Form.Item name={name} label={label} extra={description} rules={required ? [{ required: true, whitespace: true, message: `请用 Markdown 填写${label}` }] : []}>
-    <Input.TextArea placeholder="请输入内容" rows={rows} showCount/>
+    <Input.TextArea placeholder="请输入内容" rows={rows} showCount allowClear/>
   </Form.Item>;
 }
 
@@ -557,10 +558,10 @@ function SceneStep({ form }) {
   return <>
     <Card className="conversation-config-card" title="模板基本信息">
       <Row gutter={16}>
-        <Col span={12}><Form.Item name="name" label="模板名称" rules={[{ required: true }, { max: 80 }]}><Input placeholder="例如：物流运输延误智能客服"/></Form.Item></Col>
+        <Col span={12}><Form.Item name="name" label="模板名称" rules={[{ required: true }, { max: 80 }]}><Input autoFocus placeholder="例如：物流运输延误智能客服"/></Form.Item></Col>
         <Col span={12}><Form.Item name="businessType" label="业务类型" rules={[{ required: true, message:'请选择业务类型' }]}><BusinessTypeSelect modality="conversation"/></Form.Item></Col>
       </Row>
-      <Form.Item name="description" label="模板描述"><Input.TextArea rows={3} maxLength={500} showCount placeholder="说明模板覆盖的业务范围和主要用途"/></Form.Item>
+      <Form.Item name="description" label="模板描述"><Input.TextArea rows={3} maxLength={500} showCount placeholder="说明模板覆盖的业务范围和主要用途" allowClear/></Form.Item>
     </Card>
     <Card className="conversation-config-card" title="对话场景配置">
       <Row gutter={16}>
@@ -575,8 +576,8 @@ function SceneStep({ form }) {
         <Col span={24}><MarkdownField name="constraintsMarkdown" required={false} label="场景约束（包括禁止行为）" description="写清不能编造、不能承诺和必须遵守的业务边界。"/></Col>
       </Row>
       <Card size="small" className="conversation-config-card" title="其它说明（可选）" extra={<Form.Item name="otherInstructionsEnabled" valuePropName="checked" noStyle><Switch checkedChildren="需要" unCheckedChildren="不需要"/></Form.Item>}>
-        {!otherInstructionsEnabled ? <Alert type="info" showIcon message="需要补充但不属于以上字段的信息可写在这里；系统会验证其已进入最终合成指令。"/> : <Form.Item name="otherMarkdown" extra="需要补充但不属于以上字段的信息可写在这里；系统会验证其已进入最终合成指令。" rules={[{ required: true, whitespace: true, message: '请填写其它说明' }]}>
-          <Input.TextArea rows={5} showCount placeholder="可使用 Markdown"/>
+        {!otherInstructionsEnabled ? <Alert type="info" showIcon message="需要补充但不属于以上字段的信息可写在这里。"/> : <Form.Item name="otherMarkdown" extra="需要补充但不属于以上字段的信息可写在这里。" rules={[{ required: true, whitespace: true, message: '请填写其它说明' }]}>
+          <Input.TextArea rows={5} showCount allowClear placeholder="可使用 Markdown"/>
         </Form.Item>}
       </Card>
     </Card>
@@ -585,30 +586,39 @@ function SceneStep({ form }) {
 
 function SchemaFields({ fieldName, title }) {
   return <Form.List name={fieldName}>{(fields, { add, remove }) => <Card size="small" title={title} extra={<Button type="primary" icon={<PlusOutlined/>} onClick={() => add({ type: 'string', required: false })}>添加字段</Button>}>
-    {fields.length ? fields.map(field => <Row gutter={8} key={field.key} align="middle">
-      <Col span={5}><Form.Item name={[field.name, 'name']} rules={[{ required: true, pattern: /^[A-Za-z][A-Za-z0-9_]*$/, message: '使用英文字母开头的字段名' }]}><Input placeholder="字段名"/></Form.Item></Col>
-      <Col span={4}><Form.Item name={[field.name, 'type']} rules={[{ required: true }]}><Select placeholder="请选择选项" options={PARAM_TYPES.map(value => ({ value, label: value }))}/></Form.Item></Col>
-      <Col span={3}><Form.Item name={[field.name, 'required']} valuePropName="checked"><Switch checkedChildren="必填" unCheckedChildren="可选"/></Form.Item></Col>
-      <Col span={10}><Form.Item name={[field.name, 'description']}><Input placeholder="字段含义与取值约束"/></Form.Item></Col>
-      <Col span={2}><Form.Item><Button type="text" danger icon={<DeleteOutlined/>} onClick={() => remove(field.name)}/></Form.Item></Col>
-    </Row>) : <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="尚未添加字段"/>}
+    {fields.length ? <>
+      <Row gutter={8} className="schema-fields-header">
+        <Col span={5}><Text type="secondary">字段名</Text></Col>
+        <Col span={4}><Text type="secondary">字段类型</Text></Col>
+        <Col span={3}><Text type="secondary">是否必填</Text></Col>
+        <Col span={10}><Text type="secondary">字段说明</Text></Col>
+        <Col span={2}></Col>
+      </Row>
+      {fields.map(field => <Row gutter={8} key={field.key} align="middle">
+        <Col span={5}><Form.Item name={[field.name, 'name']} rules={[{ required: true, pattern: /^[A-Za-z][A-Za-z0-9_]*$/, message: '使用英文字母开头的字段名' }]}><Input placeholder="字段名"/></Form.Item></Col>
+        <Col span={4}><Form.Item name={[field.name, 'type']} rules={[{ required: true }]}><Select placeholder="请选择选项" options={PARAM_TYPES.map(value => ({ value, label: value }))}/></Form.Item></Col>
+        <Col span={3}><Form.Item name={[field.name, 'required']} valuePropName="checked"><Switch checkedChildren="必填" unCheckedChildren="可选"/></Form.Item></Col>
+        <Col span={10}><Form.Item name={[field.name, 'description']}><Input placeholder="字段含义与取值约束"/></Form.Item></Col>
+        <Col span={2}><Form.Item><Button type="text" danger icon={<DeleteOutlined/>} onClick={() => remove(field.name)}/></Form.Item></Col>
+      </Row>)}
+    </> : <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="尚未添加字段"/>}
   </Card>}</Form.List>;
 }
 
 const PLAN_FIELD_TYPES = ['文本', '数值', '布尔', '枚举', '对象', '数组'];
 const SYSTEM_EVENT_FIELD_IDS = ['user_goal', 'participants', 'facts', 'unknowns', 'knowledge_refs', 'interaction_plan', 'tool_plan', 'expected_completion', 'dialogue_brief', 'custom_fields'];
 
-function CustomPlanFieldsEditor() {
+function CustomPlanFieldsEditor({ onRecompile }) {
   return <Form.List name="customPlanFields">{(fields, { add, remove }) => <>
-    <Flex justify="space-between" align="center" className="section-title"><Text type="secondary">在系统默认事件结构之上扩展输出字段</Text><Button type="primary" size="small" icon={<PlusOutlined/>} onClick={() => add({ field_id: '', type: '文本', description: '' })}>添加字段</Button></Flex>
-    <Alert type="info" showIcon message="在系统默认事件结构之上扩展输出字段" description="添加的字段将作为 custom_fields 节点注入阶段一输出结构，模型按含义说明逐条构造取值；下方结构定义与两阶段 Prompt 预览会实时更新。采样维度定义的字段（如子场景、用户情绪）自动进入事件计划，无需在此重复声明。"/>
+    <Flex justify="space-between" align="center" className="section-title"><Text type="secondary">除默认信息外，再让模型补充一项自定义内容</Text><Space><Button icon={<ReloadOutlined/>} onClick={onRecompile}>查看编译结果</Button><Button type="primary" size="small" icon={<PlusOutlined/>} onClick={() => add({ field_id: '', type: '文本', description: '' })}>添加字段</Button></Space></Flex>
+    <Alert type="info" showIcon message="给每段对话额外补充一条自定义信息" description="合成时会先生成一条「事件」（这段对话要发生什么），事件里默认已包含场景、角色、目标等固定信息。这里添加的字段，是让模型在生成事件时额外回答你指定的一项内容（例如标准答案、参考话术），点击「查看编译结果」可在下方阶段一输出结构中看到新增字段。若只想按比例控制某个字段的取值分布，请到第 2 步「事件采样维度」中添加，无需在此重复声明。"/>
     {fields.length ? fields.map(field => <Row gutter={8} key={field.key} align="middle" className="section-title">
       <Col span={6}><Form.Item name={[field.name, 'field_id']} rules={[{ required: true, pattern: /^[A-Za-z][A-Za-z0-9_]*$/, message: '使用英文字母开头的字段 ID' }, { validator: (_, value) => SYSTEM_EVENT_FIELD_IDS.includes(String(value || '').trim()) ? Promise.reject(new Error('该字段为系统默认结构字段，无需在此声明')) : Promise.resolve() }]}><Input placeholder="字段 ID，如 reference_answer"/></Form.Item></Col>
       <Col span={5}><Form.Item name={[field.name, 'type']} rules={[{ required: true, message: '请选择类型' }]}><Select placeholder="类型" options={PLAN_FIELD_TYPES.map(value => ({ value, label: value }))}/></Form.Item></Col>
       <Col span={11}><Form.Item name={[field.name, 'description']}><Input placeholder="含义说明与取值约束"/></Form.Item></Col>
       <Col span={2}><Form.Item><Button type="text" danger icon={<DeleteOutlined/>} onClick={() => remove(field.name)}/></Form.Item></Col>
-    </Row>) : <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="未添加自定义字段；阶段一事件仅包含系统默认结构"/>}
-    {fields.length ? <Text type="secondary">想让某个字段按比例控制分布，请在第 2 步「事件采样维度」中添加维度；那里定义的维度会自动成为计划字段。</Text> : null}
+    </Row>) : <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="未添加自定义字段；生成的事件仅包含默认信息"/>}
+    {fields.length ? <Text type="secondary">想让某个字段按比例控制取值分布（如「子场景」各占多少），请到第 2 步「事件采样维度」添加，那里定义的维度会自动进入事件计划。</Text> : null}
   </>}</Form.List>;
 }
 
@@ -616,16 +626,16 @@ function ToolCatalogEditor() {
   return <Form.List name="toolCatalog">{(fields, { add, remove }) => <>
     <Flex justify="space-between" align="center" className="conversation-subsection-title template-section-heading">
       <div><Text strong>工具 List</Text><br/><Text type="secondary">工具仅用于合成训练数据，不会在配置或试运行时连接真实系统。</Text></div>
-      <Button type="primary" icon={<PlusOutlined/>} onClick={() => add({ name: '', description: '', call_condition: '', input_fields: [], example_arguments: '{}', mock_return_rules: cloneMockReturnRules() })}>添加工具</Button>
+      <Button type="primary" icon={<PlusOutlined/>} onClick={() => { add({ name: '', description: '', call_condition: '', input_fields: [], example_arguments: '{}', mock_return_rules: cloneMockReturnRules() }); message.success('已添加空白工具在列表最后一行'); }}>添加工具</Button>
     </Flex>
     {fields.length ? fields.map((field, index) => <Card key={field.key} size="small" className="conversation-tool-card" title={<Space><ToolOutlined/>工具 {index + 1}</Space>} extra={<Button type="link" danger icon={<DeleteOutlined/>} onClick={() => remove(field.name)}>删除</Button>}>
       <Row gutter={16}>
         <Col span={8}><Form.Item name={[field.name, 'name']} label="工具名称" rules={[{ required: true, pattern: /^[A-Za-z][A-Za-z0-9_]*$/, message: '例如 query_order' }]}><Input placeholder="query_order"/></Form.Item></Col>
         <Col span={16}><Form.Item name={[field.name, 'description']} label="工具说明" rules={[{ required: true }]}><Input placeholder="说明工具能查询或执行什么"/></Form.Item></Col>
       </Row>
-      <Form.Item name={[field.name, 'call_condition']} label="调用条件" rules={[{ required: true }]}><Input.TextArea rows={2} placeholder="满足什么事实和状态时才允许使用该工具"/></Form.Item>
+      <Form.Item name={[field.name, 'call_condition']} label="调用条件" rules={[{ required: true }]}><Input.TextArea rows={2} placeholder="满足什么事实和状态时才允许使用该工具" allowClear/></Form.Item>
       <SchemaFields fieldName={[field.name, 'input_fields']} title="输入参数"/>
-      <Form.Item className="section-title" name={[field.name, 'example_arguments']} label="合成参数示例" rules={[{ required: true }, { validator: (_, value) => { try { const parsed = JSON.parse(value); return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? Promise.resolve() : Promise.reject(new Error('请输入 JSON 对象')); } catch { return Promise.reject(new Error('JSON 格式不正确')); } } }]}><Input.TextArea rows={3} placeholder='{"order_id":"SYN001"}'/></Form.Item>
+      <Form.Item className="section-title" name={[field.name, 'example_arguments']} label="合成参数示例" rules={[{ required: true }, { validator: (_, value) => { try { const parsed = JSON.parse(value); return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? Promise.resolve() : Promise.reject(new Error('请输入 JSON 对象')); } catch { return Promise.reject(new Error('JSON 格式不正确')); } } }]}><Input.TextArea rows={3} placeholder='{"order_id":"SYN001"}' allowClear/></Form.Item>
       <Form.List name={[field.name, 'mock_return_rules']} rules={[{ validator: (_, rules) => rules?.length ? Promise.resolve() : Promise.reject(new Error('请至少配置一条模拟返回规则')) }]}>{(ruleFields, { add: addRule, remove: removeRule }, { errors }) => <div className="section-title">
         <Flex justify="space-between" align="center">
           <div><Text strong>模拟返回配置</Text><br/><Text type="secondary">每种返回类型分别维护返回字段、生成约束和可选 JSON 示例，避免成功与失败共用同一套字段。</Text></div>
@@ -634,8 +644,8 @@ function ToolCatalogEditor() {
         {ruleFields.map((ruleField, ruleIndex) => <Card key={ruleField.key} size="small" className="conversation-mock-return-card" title={`返回类型 ${ruleIndex + 1}`} extra={<Button type="link" danger icon={<DeleteOutlined/>} onClick={() => removeRule(ruleField.name)}>删除</Button>}>
           <Form.Item name={[ruleField.name, 'return_type']} label="返回类型" rules={[{ required: true, whitespace: true, message: '请输入返回类型' }]}><Input placeholder="例如：查询成功、无记录、调用失败"/></Form.Item>
           <SchemaFields fieldName={[ruleField.name, 'output_fields']} title="返回字段"/>
-          <Form.Item className="section-title" name={[ruleField.name, 'generation_constraint']} label="生成约束" rules={[{ required: true, whitespace: true, message: '请输入生成约束' }]}><Input.TextArea rows={3} placeholder="说明该返回类型允许和禁止生成的内容"/></Form.Item>
-          <Form.Item name={[ruleField.name, 'example_result']} label="JSON 示例（可选）" rules={[{ validator: (_, value) => { if (!String(value || '').trim()) return Promise.resolve(); try { const parsed = JSON.parse(value); return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? Promise.resolve() : Promise.reject(new Error('请输入 JSON 对象')); } catch { return Promise.reject(new Error('JSON 格式不正确')); } } }]}><Input.TextArea rows={3} placeholder='{"result_code":"NOT_FOUND","message":"无匹配记录"}'/></Form.Item>
+          <Form.Item className="section-title" name={[ruleField.name, 'generation_constraint']} label="生成约束" rules={[{ required: true, whitespace: true, message: '请输入生成约束' }]}><Input.TextArea rows={3} placeholder="说明该返回类型允许和禁止生成的内容" allowClear/></Form.Item>
+          <Form.Item name={[ruleField.name, 'example_result']} label="JSON 示例（可选）" rules={[{ validator: (_, value) => { if (!String(value || '').trim()) return Promise.resolve(); try { const parsed = JSON.parse(value); return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? Promise.resolve() : Promise.reject(new Error('请输入 JSON 对象')); } catch { return Promise.reject(new Error('JSON 格式不正确')); } } }]}><Input.TextArea rows={3} placeholder='{"result_code":"NOT_FOUND","message":"无匹配记录"}' allowClear/></Form.Item>
         </Card>)}
         {!ruleFields.length && <Alert type="warning" showIcon message="请至少配置一条模拟返回规则"/>}
         <Form.ErrorList errors={errors}/>
@@ -676,21 +686,32 @@ function SamplerEditor({ form, onManualChange, readOnly = false }) {
       { title: '维度可选值', render: (_, field) => {
         const isToolResult = form.getFieldValue(['sampler', 'dimensions', field.name, 'name']) === '工具执行结果';
         const requiresValues = !isToolResult || toolsEnabled;
-        return <><Form.Item name={[field.name, 'values']} rules={[...(requiresValues ? [{ required: true, type: 'array', min: 1, message: '至少维护 1 个枚举值' }] : []), { validator: (_, values) => (values || []).some(value => !String(value).trim()) ? Promise.reject(new Error('枚举值不能为空')) : new Set(values || []).size !== (values || []).length ? Promise.reject(new Error('枚举值不能重复')) : Promise.resolve() }]}><Select disabled={readOnly || isToolResult} mode="tags" open={false} tokenSeparators={[',', '，']} placeholder={isToolResult ? '从工具模拟返回配置自动同步' : '输入枚举值后按回车；至少 1 个'} onChange={onManualChange}/></Form.Item>{isToolResult && <Text type="secondary">{toolsEnabled ? '已从工具配置自动同步' : '工具未启用，不参与事件采样'}</Text>}</>;
+        return <><Form.Item name={[field.name, 'values']} rules={[...(requiresValues ? [{ required: true, type: 'array', min: 1, message: '至少维护 1 个枚举值' }] : []), { validator: (_, values) => (values || []).some(value => !String(value).trim()) ? Promise.reject(new Error('枚举值不能为空')) : new Set(values || []).size !== (values || []).length ? Promise.reject(new Error('枚举值不能重复')) : Promise.resolve() }]}><Select disabled={readOnly || isToolResult} mode="tags" tokenSeparators={[',', '，']} suffixIcon={<DownOutlined/>} placeholder={isToolResult ? '从工具模拟返回配置自动同步' : '输入枚举值后按回车添加，点击下拉查看已添加'} onChange={onManualChange} dropdownRender={menu => <>{menu}<div className="dim-values-footer"><Text type="secondary">新增枚举值：在输入框中输入枚举值后按回车</Text></div></>}/></Form.Item>{isToolResult && <Text type="secondary">{toolsEnabled ? '已从工具配置自动同步' : '工具未启用，不参与事件采样'}</Text>}</>;
       } },
-      { title: '高级配置（可选）', width: 140, align: 'center', render: (_, field) => <Button type="link" onClick={() => openAdvanced(field.name)}>{readOnly ? '查看' : '配置'}</Button> },
-      { title: '操作', width: 72, align: 'center', render: (_, field) => readOnly ? null : <Button type="text" danger icon={<DeleteOutlined/>} aria-label="删除维度" onClick={() => { remove(field.name); onManualChange?.(); }}/> },
+      { title: '高级配置（可选）', width: 140, align: 'center', render: (_, field) => <Button onClick={() => openAdvanced(field.name)}>{readOnly ? '查看' : '配置'}</Button> },
+      { title: '操作', width: 72, align: 'center', render: (_, field) => {
+        if (readOnly) return null;
+        const isToolResult = form.getFieldValue(['sampler', 'dimensions', field.name, 'name']) === '工具执行结果';
+        return isToolResult
+          ? <Tooltip title="工具执行结果维度从工具配置自动同步，不可删除"><Button type="text" disabled icon={<DeleteOutlined/>} aria-label="删除维度"/></Tooltip>
+          : <Button type="text" danger icon={<DeleteOutlined/>} aria-label="删除维度" onClick={() => { remove(field.name); onManualChange?.(); }}/>;
+      } },
     ];
-    return <Card className="conversation-config-card" title="事件采样维度" extra={!readOnly && <Button type="primary" icon={<PlusOutlined/>} onClick={() => { add({ dimension_id: stableConfigId('dim'), option_ids: {}, name: '', description: '', applicability_conditions: '', usage_constraints: '', values: [] }); onManualChange?.(); }}>新增维度</Button>}>
+    const visibleFields = fields.filter(field => {
+      const name = form.getFieldValue(['sampler', 'dimensions', field.name, 'name']);
+      if (name !== '工具执行结果') return true;
+      return Boolean(toolsEnabled);
+    });
+    return <Card className="conversation-config-card" title="事件采样维度" extra={!readOnly && <Button type="primary" icon={<PlusOutlined/>} onClick={() => { add({ dimension_id: stableConfigId('dim'), option_ids: {}, name: '', description: '', applicability_conditions: '', usage_constraints: '', values: [] }); onManualChange?.(); message.success('已添加空白维度在列表最后一行'); }}>新增维度</Button>}>
       <Alert type="info" showIcon message="按维度定义事件生成空间" description="系统内置维度可以直接修改或删除，也可以新增自定义维度。每个维度必须维护至少一个枚举值，合成任务会从各维度可选值中采样组合。"/>
-      <Table className="section-title" rowKey="key" size="small" pagination={false} dataSource={fields} columns={columns} locale={{ emptyText: <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="尚未配置事件采样维度"/> }}/>
+      <Table className="section-title" rowKey="key" size="small" pagination={false} dataSource={visibleFields} columns={columns} locale={{ emptyText: <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="尚未配置事件采样维度"/> }}/>
     </Card>;
   }}</Form.List>
   <Modal title="维度高级配置（可选）" open={advancedIndex !== null} onCancel={() => setAdvancedIndex(null)} destroyOnHidden footer={readOnly ? <Button onClick={() => setAdvancedIndex(null)}>关闭</Button> : undefined} onOk={readOnly ? undefined : saveAdvanced} okText="保存配置" cancelText="取消">
     <Form form={advancedForm} layout="vertical" disabled={readOnly} preserve={false}>
-      <Form.Item name="description" label="维度说明"><Input.TextArea rows={3} placeholder="说明该维度的业务含义和采样目的"/></Form.Item>
-      <Form.Item name="applicability_conditions" label="适用条件"><Input.TextArea rows={3} placeholder="说明什么情况下使用该维度或其中的枚举值"/></Form.Item>
-      <Form.Item name="usage_constraints" label="禁止条件"><Input.TextArea rows={4} placeholder="说明禁止组合、禁止生成或必须避开的情况"/></Form.Item>
+      <Form.Item name="description" label="维度说明"><Input.TextArea rows={3} placeholder="说明该维度的业务含义和采样目的" allowClear/></Form.Item>
+      <Form.Item name="applicability_conditions" label="适用条件"><Input.TextArea rows={3} placeholder="说明什么情况下使用该维度或其中的枚举值" allowClear/></Form.Item>
+      <Form.Item name="usage_constraints" label="禁止条件"><Input.TextArea rows={4} placeholder="说明禁止组合、禁止生成或必须避开的情况" allowClear/></Form.Item>
     </Form>
   </Modal>
   </>;
@@ -704,15 +725,14 @@ function KnowledgeToolsStep({ form, onManualChange, readOnly = false }) {
   const ids = ruleIds(knowledgeText);
   return <>
     <SamplerEditor form={form} onManualChange={onManualChange} readOnly={readOnly}/>
-    <Alert type="info" showIcon message="知识卡和工具都不是必填项" description="关闭后系统会从合成指令中移除对应要求，并在质检时禁止模型虚构知识引用或工具调用。"/>
     <Card className="conversation-config-card" title={<Space><FileTextOutlined/>知识卡</Space>} extra={<Form.Item name="knowledgeEnabled" valuePropName="checked" noStyle><Switch checkedChildren="已启用" unCheckedChildren="未启用"/></Form.Item>}>
       {!knowledgeEnabled ? <Alert type="info" showIcon message="本模板不注入知识卡；仍可继续下一步"/> : <>
         <Alert type="success" showIcon message="知识卡示例" description={<span>知识卡用于提供模型回答问题时可直接引用的业务知识。每张卡以 <Text code>[知识卡 唯一ID]</Text> 开头，填写适用问题、已知业务事实和推荐回答；多张知识卡可连续粘贴，ID 不可重复。</span>}/>
         <Form.Item className="section-title" name="knowledgeUsageInstructions" label="知识卡使用说明" rules={[{ required: true, whitespace: true, message: '请填写知识卡使用说明' }]} extra="说明何时引用知识卡、如何处理冲突，以及回答时必须遵守的依据边界。">
-          <Input.TextArea placeholder="请输入知识卡使用说明" rows={4} showCount onBlur={onManualChange}/>
+          <Input.TextArea placeholder="请输入知识卡使用说明" rows={4} showCount onBlur={onManualChange} allowClear/>
         </Form.Item>
         <Form.Item className="section-title" name="knowledgeText" label={<Space>知识卡内容<Tag color={ids.length ? 'green' : 'default'}>{ids.length} 张</Tag></Space>} rules={[{ required: true, whitespace: true, message: '请粘贴至少一张知识卡' }]} extra="示例：当用户询问运输状态长时间未更新时，说明状态停更的常见原因、当前可以确认的信息，以及建议用户采取的下一步。">
-          <Input.TextArea rows={16} showCount placeholder={'[知识卡 DELIVERY-STATUS-001]\n知识主题：运输状态长时间未更新\n适用问题：用户询问物流信息为什么超过 24 小时没有更新\n已知业务事实：状态停更可能由转运扫描延迟、天气或网络同步延迟造成；状态停更不等于货物丢失\n推荐回答：先说明当前可查询到的最后物流节点和更新时间，再解释可能原因；如超过承诺时效，建议用户发起异常查询或联系人工客服'} onBlur={onManualChange}/>
+          <Input.TextArea rows={16} showCount placeholder={'[知识卡 DELIVERY-STATUS-001]\n知识主题：运输状态长时间未更新\n适用问题：用户询问物流信息为什么超过 24 小时没有更新\n已知业务事实：状态停更可能由转运扫描延迟、天气或网络同步延迟造成；状态停更不等于货物丢失\n推荐回答：先说明当前可查询到的最后物流节点和更新时间，再解释可能原因；如超过承诺时效，建议用户发起异常查询或联系人工客服'} onBlur={onManualChange} allowClear/>
         </Form.Item>
       </>}
     </Card>
@@ -727,13 +747,13 @@ function KnowledgeToolsStep({ form, onManualChange, readOnly = false }) {
       {!fewShotEnabled ? <Alert type="info" showIcon message="本模板不使用参考对话" description="开启后可按 JSONL 粘贴高质量完整对话，每行一条。"/> : <>
         <Alert type="info" showIcon message="每行必须是一条完整对话 JSON" description="每个 JSON 对象必须包含非空 messages 数组，并至少包含一条 user 和一条 assistant 消息。不同类型的参考对话请分别粘贴。"/>
         <Form.Item className="section-title" name="fewShotDialogueJsonl" label="普通对话 JSONL" rules={[{ validator: (_, value) => validateFewShotJsonl(value) }]} extra={'示例：{"messages":[{"role":"user","content":"你好"},{"role":"assistant","content":"您好，请问需要什么帮助？"}]}'}>
-          <Input.TextArea rows={9} className="json-textarea" placeholder="每行一条完整对话 JSON" onBlur={onManualChange}/>
+          <Input.TextArea rows={9} className="json-textarea" placeholder="每行一条完整对话 JSON" onBlur={onManualChange} allowClear/>
         </Form.Item>
         {knowledgeEnabled && <Form.Item name="fewShotKnowledgeJsonl" label="带知识卡的对话 JSONL（可选）" rules={[{ validator: (_, value) => String(value || '').trim() ? validateFewShotJsonl(value) : Promise.resolve() }]} extra="仅在启用知识卡时显示；如需提供此类示例，每行粘贴一条完整对话。">
-          <Input.TextArea rows={9} className="json-textarea" placeholder="每行一条带知识卡的完整对话 JSON" onBlur={onManualChange}/>
+          <Input.TextArea rows={9} className="json-textarea" placeholder="每行一条带知识卡的完整对话 JSON" onBlur={onManualChange} allowClear/>
         </Form.Item>}
         {toolsEnabled && <Form.Item name="fewShotToolJsonl" label="带工具调用轨迹的对话 JSONL（可选）" rules={[{ validator: (_, value) => String(value || '').trim() ? validateFewShotJsonl(value, { requireToolTrace: true }) : Promise.resolve() }]} extra="仅在启用工具时显示；如填写，assistant tool_calls 必须与 tool 消息的 tool_call_id 配对。">
-          <Input.TextArea rows={9} className="json-textarea" placeholder="每行一条带完整工具调用轨迹的对话 JSON" onBlur={onManualChange}/>
+          <Input.TextArea rows={9} className="json-textarea" placeholder="每行一条带完整工具调用轨迹的对话 JSON" onBlur={onManualChange} allowClear/>
         </Form.Item>}
       </>}
     </Card>
@@ -748,15 +768,30 @@ function PromptPreviewStep({ form }) {
   const watched = Form.useWatch([], form) || {};
   const customPlanFields = Form.useWatch('customPlanFields', form) || [];
   const [previewSeed, setPreviewSeed] = useState(20260908);
+  const [sampled, setSampled] = useState(false);
   const compiledPrompts = useMemo(() => compileConversationPrompts({ ...form.getFieldsValue(true), ...watched }, { seed: previewSeed, language: 'zh-CN', minTurns: 3, maxTurns: 6, referenceTime: '2026-09-08T10:00:00+08:00' }), [form, watched, previewSeed]);
   const ordinaryExample='{"messages":[{"role":"user","content":"我的订单现在到哪里了？"},{"role":"assistant","content":"请提供合成运单号，我来帮您查询。"}]}';
   const toolExample='{"messages":[{"role":"user","content":"请查询运单 SYN2026000001"},{"role":"assistant","content":null,"tool_calls":[{"id":"call_001","type":"function","function":{"name":"query_shipment","arguments":"{\\"shipment_id\\":\\"SYN2026000001\\"}"}}]},{"role":"tool","tool_call_id":"call_001","content":"{\\"status\\":\\"运输中\\"}"},{"role":"assistant","content":"该运单当前正在运输中。"}]}';
+  const recompile = () => {
+    const fields = customPlanFields || [];
+    for (const field of fields) {
+      const id = String(field?.field_id || '').trim();
+      if (!id) { message.warning('自定义字段存在未填写的字段 ID，请先补全再重新编译'); return; }
+      if (SYSTEM_EVENT_FIELD_IDS.includes(id)) { message.warning(`字段「${id}」为系统默认结构字段，请换一个字段 ID`); return; }
+    }
+    const ids = fields.map(f => String(f?.field_id || '').trim()).filter(Boolean);
+    if (new Set(ids).size !== ids.length) { message.warning('自定义字段 ID 不能重复'); return; }
+    setPreviewSeed(seed => seed + 1);
+    if (!fields.length) { message.info('尚未添加自定义字段；事件仅包含默认信息'); return; }
+    message.success(`已重新编译 ${fields.length} 个自定义字段，请在下方「阶段一输出 JSON 结构定义」查看新增字段`);
+  };
+  const startSampling = () => { setPreviewSeed(seed => seed + 1); setSampled(true); };
   return <>
     <Card className="section-title" size="small" title="阶段一输出 JSON 结构定义">
-      <Alert type="info" showIcon message="由编译器生成，只读预览" description="模型实际收到的 event_schema 原始 JSON，随上方自定义输出字段实时更新。采样维度的分配值通过「已分配采样条件」输入事件生成，不在输出结构中重复定义。"/>
+      <Alert type="info" showIcon message="由编译器生成，只读预览" description="模型实际收到的 event_schema 原始 JSON，随自定义输出字段更新。采样维度的分配值通过「已分配采样条件」输入事件生成，不在输出结构中重复定义。"/>
       <pre className="conversation-prompt-preview">{JSON.stringify(compiledPrompts.stageOne.input.event_schema, null, 2)}</pre>
       <Divider orientation="left">自定义输出字段（可选）</Divider>
-      <CustomPlanFieldsEditor/>
+      <CustomPlanFieldsEditor onRecompile={recompile}/>
     </Card>
     <Card className="section-title" size="small" title="阶段二输出 JSON 结构定义与数据格式">
       <Alert type="info" showIcon message="模型实际收到的 dialogue_schema 原始 JSON，由编译器生成，只读预览" description="阶段二输出即训练样本内容：dialogue.messages 原样落盘，每条样本一行 JSONL；发生工具调用时保留调用参数、工具返回及后续回答；输入契约无法满足时返回 status=&quot;conflict&quot;。"/>
@@ -769,8 +804,11 @@ function PromptPreviewStep({ form }) {
         ]}/> },
       ]}/>
     </Card>
-    <Card className="section-title" size="small" title="两阶段 Prompt" extra={<Button onClick={() => setPreviewSeed(seed => seed + 1)}>换一个采样条件预览</Button>}>
+    <Card className="section-title" size="small" title="两阶段 Prompt" extra={sampled && <Button onClick={() => setPreviewSeed(seed => seed + 1)}>换一个采样条件预览</Button>}>
       <Alert type="info" showIcon message="请求预览：预览只执行采样与编译，不调用生成模型；比例和数量仍由合成任务配置，以下语言、轮数和参考时间仅用于本页明确展示预览结果；当前未绑定合成任务中的实际模型和生成参数，页面展示的是由统一编译器生成、尚未发送的请求。"/>
+      {!sampled ? <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="尚未开始采样。点击下方按钮，将本次模板配置组合成一条具体的采样条件，并生成对应的两阶段 Prompt。">
+        <Button type="primary" icon={<PlayCircleOutlined/>} onClick={startSampling}>开始采样</Button>
+      </Empty> : <>
       {!!compiledPrompts.warnings.length && <Alert className="section-title" type="warning" showIcon message="存在待解析的自定义采样约束" description={compiledPrompts.warnings.join('；')}/>}
       <Descriptions className="section-title" bordered size="small" column={2} items={[{key:'turns',label:'预览轮数',children:'3～6 轮'},{key:'time',label:'事件参考时间',children:'2026-09-08 10:00:00 +08:00'}]}/>
       <Tabs className="section-title" items={[
@@ -778,6 +816,7 @@ function PromptPreviewStep({ form }) {
         {key:'stage1',label:'阶段一：事件生成 Prompt',children:<Tabs type="card" items={[{key:'system',label:'系统指令（System Prompt）',children:<pre className="conversation-prompt-preview">{compiledPrompts.stageOne.system}</pre>},{key:'user',label:'本条生成指令（User Prompt）',children:<pre className="conversation-prompt-preview">{compiledPrompts.stageOne.user}</pre>},{key:'request',label:'完整请求',children:<><Text copyable={{text:compactJson(compiledPrompts.stageOne.request)}}>复制完整请求 JSON</Text><pre className="conversation-prompt-preview">{compactJson(compiledPrompts.stageOne.request)}</pre></>}]} />},
         {key:'stage2',label:'阶段二：完整对话 Prompt',children:<><Alert type="warning" showIcon message="骨架预览，冻结事件待填充" description="只有阶段一事件通过程序校验后才能执行阶段二；此处不会把采样结果伪装成已生成事件。"/><Tabs className="section-title" type="card" items={[{key:'system',label:'系统指令（System Prompt）',children:<pre className="conversation-prompt-preview">{compiledPrompts.stageTwo.system}</pre>},{key:'user',label:'本条生成指令（User Prompt）',children:<pre className="conversation-prompt-preview">{compiledPrompts.stageTwo.user}</pre>},{key:'request',label:'完整请求',children:<><Text copyable={{text:compactJson(compiledPrompts.stageTwo.request)}}>复制完整请求 JSON</Text><pre className="conversation-prompt-preview">{compactJson(compiledPrompts.stageTwo.request)}</pre></>}]} /></>},
       ]}/>
+      </>}
     </Card>
   </>;
 }
@@ -874,6 +913,8 @@ export function ConversationTemplateEditor({ open, template, draftId, onClose, o
   const [validation, setValidation] = useState(null);
   const [trialRun, setTrialRun] = useState(null);
   const [authoringContract, setAuthoringContract] = useState(null);
+
+  useEffect(()=>{setLeaveDirty(open&&dirty&&!readOnly);return()=>setLeaveDirty(false);},[open,dirty,readOnly]);
 
   useEffect(() => {
     if (!open) return undefined;
@@ -1041,7 +1082,7 @@ export function ConversationTemplateEditor({ open, template, draftId, onClose, o
 
   const requestClose = () => {
     if (readOnly || !dirty) { onClose?.(); return; }
-    Modal.confirm({ title: '草稿尚未保存', content: '关闭后本次未保存的修改会丢失。', okText: '放弃修改并关闭', okButtonProps: { danger: true }, cancelText: '继续编辑', onOk: onClose });
+    Modal.confirm({ title: '有未保存的修改，确定离开吗？', content: '离开后本次未保存的修改会丢失。', okText: '放弃修改', okType: 'danger', cancelText: '继续编辑', onOk: onClose });
   };
 
   const markConfigurationChanged = () => { setDirty(true); setCompileResult(null); setValidation(null); };

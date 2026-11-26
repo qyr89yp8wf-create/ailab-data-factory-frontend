@@ -1,3 +1,4 @@
+import {defaultHandwritingGenerator,handwritingPreview} from '../handwriting.js';
 import UnifiedQualityEditor from '../UnifiedQualityEditor';
 import {ControlledModelConfig,ModelConfigField,ModelConfigGroup} from '../ModelConfigField';
 import PrivacyPolicyEditor,{validatePrivacyPolicy,privacyFieldOptions} from '../PrivacyPolicyEditor';
@@ -20,6 +21,7 @@ import { formatDateTime } from '../timeUtils';
 
 import RuleQualityReport,{QualityReportDownloadButton} from '../RuleQualityReport';
 import {templatePrivacyCheck} from '../qualityResults';
+import {setLeaveDirty} from '../leaveGuard';
 const { Text, Title, Paragraph } = Typography;
 
 const stepItems = [
@@ -30,7 +32,7 @@ const stepItems = [
 ];
 
 const kindLabels = { cell: '单元格', text: '文字', asset: '印章/图案', field: '字段' };
-const assetLabels = { stamp: '印章', qrcode: '二维码', barcode: '条形码', fixed_image: '固定图案' };
+const assetLabels = { stamp: '印章', qrcode: '二维码', barcode: '条形码', fixed_image: '固定图案', handwriting: '模拟手写笔迹' };
 const generatorLabels = { dictionary_rule: '字典 + 规则', computed: '计算值', llm_prompt: '模型 + Prompt' };
 const fallbackDataTypes = ['text','code','serial_number','company_name','person_name','address','date','amount','quantity','integer','decimal','enum','country_region','currency','domestic_region','customs_district','port','transport_mode','supervision_mode','levy_nature','trade_term','package_type','hs_code','unit'];
 
@@ -221,9 +223,9 @@ function FieldRuleEditor({ field, onChange, compact = false, semanticConfig }) {
     <Text type="secondary">数据类型</Text><Select placeholder="请选择数据类型" showSearch optionFilterProp="label" value={field.data_type} onChange={value => onChange({ data_type: value })} options={dataTypeOptions}/>
     <Flex justify="space-between"><Text type="secondary">必填</Text><Switch checked={field.required} onChange={value => onChange({ required: value })}/></Flex>
     <Text type="secondary">生成方式</Text><Select placeholder="请选择生成方式" value={field.generator?.type} onChange={value => updateGenerator({ type: value })} options={Object.entries(generatorLabels).map(([value,label]) => ({value,label}))}/>
-    {field.generator?.type === 'dictionary_rule' && <><Text type="secondary">本地字典</Text><Select showSearch allowClear optionFilterProp="label" value={field.generator.dictionary || undefined} placeholder="选择字典" onChange={dictionary => updateGenerator({ dictionary: dictionary || '' })} options={dictionaryOptions}/><Text type="secondary">字典抽取与格式规则</Text><Input.TextArea placeholder="请输入字典抽取与格式规则" rows={3} value={field.generator.rule} onChange={event => updateGenerator({ rule: event.target.value })}/><Text type="secondary">试运行候选值（每行一个）</Text><Input.TextArea placeholder="请输入试运行候选值（每行一个）" rows={4} value={(field.generator.candidates || []).join('\n')} onChange={event => updateGenerator({ candidates: event.target.value.split('\n').map(value => value.trim()).filter(Boolean) })}/></>}
-    {field.generator?.type === 'llm_prompt' && <><Text type="secondary">Prompt</Text><Input.TextArea placeholder="请输入Prompt" rows={5} value={field.generator.prompt} onChange={event => updateGenerator({ prompt: event.target.value })}/></>}
-    {field.generator?.type === 'computed' && <><Text type="secondary">计算表达式 / 说明</Text><Input.TextArea placeholder="请输入计算表达式 / 说明" value={field.generator.expression} onChange={event => updateGenerator({ expression: event.target.value })}/></>}
+    {field.generator?.type === 'dictionary_rule' && <><Text type="secondary">本地字典</Text><Select showSearch allowClear optionFilterProp="label" value={field.generator.dictionary || undefined} placeholder="选择字典" onChange={dictionary => updateGenerator({ dictionary: dictionary || '' })} options={dictionaryOptions}/><Text type="secondary">字典抽取与格式规则</Text><Input.TextArea placeholder="请输入字典抽取与格式规则" rows={3} value={field.generator.rule} onChange={event => updateGenerator({ rule: event.target.value })} allowClear/><Text type="secondary">试运行候选值（每行一个）</Text><Input.TextArea placeholder="请输入试运行候选值（每行一个）" rows={4} value={(field.generator.candidates || []).join('\n')} onChange={event => updateGenerator({ candidates: event.target.value.split('\n').map(value => value.trim()).filter(Boolean) })} allowClear/></>}
+    {field.generator?.type === 'llm_prompt' && <><Text type="secondary">Prompt</Text><Input.TextArea placeholder="请输入Prompt" rows={5} value={field.generator.prompt} onChange={event => updateGenerator({ prompt: event.target.value })} allowClear/></>}
+    {field.generator?.type === 'computed' && <><Text type="secondary">计算表达式 / 说明</Text><Input.TextArea placeholder="请输入计算表达式 / 说明" value={field.generator.expression} onChange={event => updateGenerator({ expression: event.target.value })} allowClear/></>}
   </Space>;
 }
 
@@ -239,7 +241,7 @@ function StampContentRule({ label, rule = {}, fields, onChange }) {
       <Select placeholder="请选择选项" value={rule.mode || 'fixed'} onChange={mode => patch({ mode })} options={options}/>
       {rule.mode === 'fixed' && <Input value={rule.value} placeholder={`请输入${label}`} onChange={event => patch({ value: event.target.value })}/>} 
       {rule.mode === 'bind_field' && <Select showSearch value={rule.field_id || undefined} placeholder="选择字段" onChange={field_id => patch({ field_id })} options={fields.map(field => ({ value: field.id, label: `${field.name}（${field.id}）` }))}/>} 
-      {rule.mode === 'dictionary_rule' && <><Input value={rule.dictionary} placeholder="字典名称" onChange={event => patch({ dictionary: event.target.value })}/><Input.TextArea rows={3} value={(rule.candidates || []).join('\n')} placeholder="试运行候选值，每行一个" onChange={event => patch({ candidates: event.target.value.split('\n').map(value => value.trim()).filter(Boolean) })}/></>}
+      {rule.mode === 'dictionary_rule' && <><Input value={rule.dictionary} placeholder="字典名称" onChange={event => patch({ dictionary: event.target.value })}/><Input.TextArea rows={3} value={(rule.candidates || []).join('\n')} placeholder="试运行候选值，每行一个" onChange={event => patch({ candidates: event.target.value.split('\n').map(value => value.trim()).filter(Boolean) })} allowClear/></>}
     </Space>
   </Card>;
 }
@@ -256,7 +258,7 @@ function StampSerialRule({ rule = {}, fields, onChange }) {
     <Space direction="vertical" size={8} style={{ width:'100%' }}>
       <Select placeholder="请选择选项" value={rule.mode || 'none'} onChange={mode => patch({ mode })} options={options}/>
       {rule.mode === 'fixed' && <Input value={rule.value} placeholder="请输入固定编号" onChange={event => patch({ value:event.target.value })}/>} 
-      {rule.mode === 'bind_field' && <Select showSearch value={rule.field_id || undefined} placeholder="选择动态字段" onChange={field_id => patch({ field_id })} options={fields.map(field => ({ value:field.id, label:`${field.name}（${field.id}）` }))}/>} 
+      {rule.mode === 'bind_field' && <Select showSearch value={rule.field_id || undefined} aria-label="手写笔迹绑定字段" placeholder="选择动态字段" onChange={field_id => patch({ field_id })} options={fields.map(field => ({ value:field.id, label:`${field.name}（${field.id}）` }))}/>} 
       {rule.mode === 'random_digits' && <><Text type="secondary">随机数字位数</Text><InputNumber placeholder="请输入随机数字位数（1～20）" min={1} max={20} value={rule.digits || 8} onChange={digits => patch({ digits })} style={{ width:'100%' }}/></>}
     </Space>
   </Card>;
@@ -264,6 +266,7 @@ function StampSerialRule({ rule = {}, fields, onChange }) {
 
 function PropertyPanel({ draft, selection, onDraftChange, jobId, onAssetUpload, uploadingAssetId, semanticConfig }) {
   const [stampPreviewOpen,setStampPreviewOpen]=useState(false);
+  const [signaturePreviewOpen,setSignaturePreviewOpen]=useState(false);
   const [materialOpen,setMaterialOpen]=useState(false);
   const [materialProgress,setMaterialProgress]=useState(0);
   const [materialPrompt,setMaterialPrompt]=useState('生成一个不包含真实品牌、机构名称或官方标志的抽象文档装饰图案，透明背景，适合合成训练数据。');
@@ -299,13 +302,16 @@ function PropertyPanel({ draft, selection, onDraftChange, jobId, onAssetUpload, 
     };
     const generator = asset_type === 'stamp'
       ? { ...defaultStampGenerator(), ...reference }
-      : ['qrcode','barcode'].includes(asset_type)
-        ? { ...defaultCodeGenerator(), ...reference }
-        : { ...defaultFixedAssetGenerator(), ...reference };
+      : asset_type === 'handwriting'
+        ? { ...defaultHandwritingGenerator(), ...reference }
+        : ['qrcode','barcode'].includes(asset_type)
+          ? { ...defaultCodeGenerator(), ...reference }
+          : { ...defaultFixedAssetGenerator(), ...reference };
     update({ asset_type, generator });
   };
   const updateAssetGenerator = patch => update({ generator: { ...item.generator, ...patch } });
   const updateStamp = patch => updateAssetGenerator({ stamp: { ...(item.generator?.stamp || defaultStampGenerator().stamp), ...patch, safety_text: '合成 / 仅供模型训练' } });
+  const updateHandwriting = patch => updateAssetGenerator({ handwriting: { ...(item.generator?.handwriting || defaultHandwritingGenerator().handwriting), ...patch } });
   const materialUrl = item.generator?.asset_path && jobId
     ? templateApi.artifactUrl(item.generator.asset_path)
     : '';
@@ -324,7 +330,7 @@ function PropertyPanel({ draft, selection, onDraftChange, jobId, onAssetUpload, 
     </>}
     {selection.kind === 'text' && <>
       <Text type="secondary">文字类型</Text><Select value={['fixed_label','dynamic_field'].includes(item.kind) ? item.kind : undefined} placeholder="请选择固定或动态" onChange={selectTextKind} options={[{value:'fixed_label',label:'固定文字'},{value:'dynamic_field',label:'动态字段'}]}/>
-      <Text type="secondary">示例文字</Text><Input.TextArea placeholder="请输入示例文字" value={item.sample_text} onChange={event => update({ sample_text: event.target.value })}/>
+      <Text type="secondary">示例文字</Text><Input.TextArea allowClear placeholder="请输入示例文字" value={item.sample_text} onChange={event => update({ sample_text: event.target.value })}/>
       {item.kind === 'dynamic_field' && <>
         <Tooltip title="选择当前动态字段对应的固定字段标签；修改选项后会同步更新绑定关系。"><Text type="secondary">绑定固定字段</Text></Tooltip>
         <Select showSearch allowClear optionFilterProp="label" placeholder="请选择固定字段"
@@ -337,7 +343,7 @@ function PropertyPanel({ draft, selection, onDraftChange, jobId, onAssetUpload, 
     </>}
     {selection.kind === 'asset' && <>
       <Text type="secondary">图案类型</Text><Select placeholder="请选择图案类型" value={item.asset_type} onChange={changeAssetType} options={Object.entries(assetLabels).map(([value,label]) => ({value,label}))}/>
-      <Text type="secondary">生成方式</Text><Select placeholder="请选择生成方式" value={item.asset_type==='stamp'?'procedural':item.generator?.type||'fixed_asset'} onChange={type => updateAssetGenerator({ type })} options={item.asset_type === 'stamp' ? [{value:'procedural',label:'程序生成安全印章'}] : ['qrcode','barcode'].includes(item.asset_type) ? [{value:'procedural',label:'程序安全生成'},{value:'fixed_asset',label:'固定合成素材'}] : [{value:'fixed_asset',label:'固定合成素材'}]}/>
+      <Text type="secondary">生成方式</Text><Select placeholder="请选择生成方式" value={item.asset_type==='stamp'?'procedural':item.generator?.type||'fixed_asset'} onChange={type => updateAssetGenerator({ type })} options={item.asset_type === 'stamp' ? [{value:'procedural',label:'程序生成安全印章'}] : item.asset_type === 'handwriting' ? [{value:'procedural',label:'程序生成手写笔迹'}] : ['qrcode','barcode'].includes(item.asset_type) ? [{value:'procedural',label:'程序安全生成'},{value:'fixed_asset',label:'固定合成素材'}] : [{value:'fixed_asset',label:'固定合成素材'}]}/>
       {item.generator?.type === 'procedural' && item.asset_type === 'stamp' && <>
         <Alert type="info" showIcon message="模板只定义章型和内容规则" description="是否出现、出现比例及扩散增强在数据生成任务中配置，不写入模板。程序章会强制带有“合成 / 仅供模型训练”标识。"/>
         <Text type="secondary">印章类型</Text><Select placeholder="请选择印章类型" value={item.generator?.stamp?.preset || 'official_circle'} onChange={preset => updateStamp({ preset })} options={[{value:'official_circle',label:'圆形公章'},{value:'special_circle',label:'圆形专用章'},{value:'special_ellipse',label:'椭圆形专用章'}]}/>
@@ -347,6 +353,17 @@ function PropertyPanel({ draft, selection, onDraftChange, jobId, onAssetUpload, 
         <StampSerialRule fields={draft.fields} rule={item.generator?.stamp?.serial_number} onChange={serial_number => updateStamp({ serial_number })}/>
         <Text type="secondary">强制安全标识</Text><Input value="合成 / 仅供模型训练" disabled/>
         <Button block type="primary" ghost onClick={()=>setStampPreviewOpen(true)}>生成示例</Button>
+      </>}
+      {item.generator?.type === 'procedural' && item.asset_type === 'handwriting' && <>
+        <Alert type="info" showIcon message="签署人名按字段值播种" description="同一字段值永远得到同一签署人名与同一笔迹；笔迹为程序生成的抽象笔画，不模仿任何真实个人签名。"/>
+        <Text type="secondary">人名来源</Text><Select aria-label="人名来源" value={(item.generator?.handwriting || defaultHandwritingGenerator().handwriting).name_mode} onChange={name_mode => updateHandwriting({ name_mode })} options={[{value:'bind_field',label:'绑定动态字段（如签署人字段）'},{value:'fixed',label:'固定虚构人名'}]}/>
+        {(item.generator?.handwriting || defaultHandwritingGenerator().handwriting).name_mode === 'bind_field'
+          ? <Select showSearch style={{width:'100%'}} value={(item.generator?.handwriting || {}).field_id || undefined} placeholder="选择动态字段" onChange={field_id => updateHandwriting({ field_id })} options={draft.fields.map(field => ({ value:field.id, label:`${field.name}（${field.id}）` }))}/>
+          : <><Text type="secondary">虚构人名</Text><Input placeholder="请输入虚构人名" value={(item.generator?.handwriting || {}).fixed_name || ''} onChange={event => updateHandwriting({ fixed_name: event.target.value })}/></>}
+        <Text type="secondary">笔迹风格</Text><Select aria-label="笔迹风格" value={(item.generator?.handwriting || defaultHandwritingGenerator().handwriting).style} onChange={style => updateHandwriting({ style })} options={[{value:'neat',label:'工整'},{value:'natural',label:'自然'},{value:'casual',label:'潦草'}]}/>
+        <Text type="secondary">笔画粗细</Text><Select aria-label="笔画粗细" value={(item.generator?.handwriting || defaultHandwritingGenerator().handwriting).stroke} onChange={stroke => updateHandwriting({ stroke })} options={[{value:'thin',label:'细'},{value:'medium',label:'适中'},{value:'bold',label:'粗'}]}/>
+        <Text type="secondary">笔迹颜色</Text><Select aria-label="笔迹颜色" value={(item.generator?.handwriting || defaultHandwritingGenerator().handwriting).color} onChange={color => updateHandwriting({ color })} options={[{value:'navy',label:'深蓝'},{value:'black',label:'纯黑'},{value:'blueblack',label:'蓝黑'}]}/>
+        <Button block type="primary" ghost onClick={()=>setSignaturePreviewOpen(true)}>生成示例</Button>
       </>}
       {item.generator?.type === 'procedural' && ['qrcode','barcode'].includes(item.asset_type) && <>
         <Alert type="info" showIcon message="程序安全生成" description="所有码内容强制以 SYNTHETIC: 开头；条形码同时显示 SYNTHETIC 标记，避免被误用为真实业务码。"/>
@@ -362,7 +379,7 @@ function PropertyPanel({ draft, selection, onDraftChange, jobId, onAssetUpload, 
       </>}
     </>}
     {selection.kind === 'field' && <FieldRuleEditor semanticConfig={semanticConfig} field={item} onChange={update}/>} 
-  </Card><Modal title="安全印章示例" open={stampPreviewOpen} onCancel={()=>setStampPreviewOpen(false)} footer={<Button type="primary" onClick={()=>setStampPreviewOpen(false)}>确认</Button>}><div style={{height:280,display:'grid',placeItems:'center',background:'#fafafa'}}><div style={{width:210,height:210,border:'8px double #d4380d',borderRadius:'50%',display:'grid',placeItems:'center',color:'#d4380d',fontWeight:700,textAlign:'center',transform:'rotate(-8deg)'}}>合成示例机构<br/><span style={{fontSize:58}}>✡</span><br/>仅供模型训练</div></div></Modal><Modal title="模拟合成素材" open={materialOpen} onCancel={()=>setMaterialOpen(false)} footer={materialReady?<Space><Button onClick={()=>setMaterialOpen(false)}>取消</Button><Button type="primary" onClick={()=>{updateAssetGenerator({asset_source:'synthetic_visual_model',asset_path:'mock://synthetic-asset',original_filename:'synthetic-asset.png'});setMaterialOpen(false);message.success('已作为固定合成素材使用');}}>确认使用</Button></Space>:null}><ModelConfigField label="视觉模型"><Select placeholder="请选择视觉模型" aria-label="视觉模型" value="qwen-image" style={{width:'100%'}} options={[{value:'qwen-image',label:'Qwen Image'}]}/></ModelConfigField><Text type="secondary">生成 Prompt</Text><Input.TextArea placeholder="请输入生成 Prompt" rows={5} value={materialPrompt} onChange={event=>setMaterialPrompt(event.target.value)}/><Button className="section-title" type="primary" onClick={()=>{setMaterialProgress(10);setMaterialReady(false);let value=10;const timer=setInterval(()=>{value=Math.min(100,value+18);setMaterialProgress(value);if(value>=100){clearInterval(timer);setMaterialReady(true);}},120);}}>生成</Button>{materialProgress>0&&<Progress percent={materialProgress} status={materialProgress<100?'active':'success'}/>} {materialReady&&<div style={{height:180,display:'grid',placeItems:'center',background:'linear-gradient(135deg,#e6f4ff,#f9f0ff)',borderRadius:8,fontSize:64}}>◈</div>}</Modal></>;
+  </Card><Modal title="模拟手写笔迹示例" open={signaturePreviewOpen} onCancel={()=>setSignaturePreviewOpen(false)} footer={<Button type="primary" onClick={()=>setSignaturePreviewOpen(false)}>确认</Button>}>{(()=>{const preview=handwritingPreview(item,draft);return preview.error?<Alert type="warning" showIcon message={preview.error}/>:<><div style={{height:140,display:'grid',placeItems:'center',background:'#fafafa',borderRadius:8}}><img style={{width:340,maxWidth:'100%'}} src={preview.url} alt="模拟手写笔迹预览"/></div><Text type="secondary">预览人名：{preview.name}（按字段值播种，同人同笔迹）</Text></>;})()}</Modal><Modal title="安全印章示例" open={stampPreviewOpen} onCancel={()=>setStampPreviewOpen(false)} footer={<Button type="primary" onClick={()=>setStampPreviewOpen(false)}>确认</Button>}><div style={{height:280,display:'grid',placeItems:'center',background:'#fafafa'}}><div style={{width:210,height:210,border:'8px double #d4380d',borderRadius:'50%',display:'grid',placeItems:'center',color:'#d4380d',fontWeight:700,textAlign:'center',transform:'rotate(-8deg)'}}>合成示例机构<br/><span style={{fontSize:58}}>✡</span><br/>仅供模型训练</div></div></Modal><Modal title="模拟合成素材" open={materialOpen} onCancel={()=>setMaterialOpen(false)} footer={materialReady?<Space><Button onClick={()=>setMaterialOpen(false)}>取消</Button><Button type="primary" onClick={()=>{updateAssetGenerator({asset_source:'synthetic_visual_model',asset_path:'mock://synthetic-asset',original_filename:'synthetic-asset.png'});setMaterialOpen(false);message.success('已作为固定合成素材使用');}}>确认使用</Button></Space>:null}><ModelConfigField label="视觉模型"><Select placeholder="请选择视觉模型" aria-label="视觉模型" value="qwen-image" style={{width:'100%'}} options={[{value:'qwen-image',label:'Qwen Image'}]}/></ModelConfigField><Text type="secondary">生成 Prompt</Text><Input.TextArea allowClear placeholder="请输入生成 Prompt" rows={5} value={materialPrompt} onChange={event=>setMaterialPrompt(event.target.value)}/><Button className="section-title" type="primary" onClick={()=>{setMaterialProgress(10);setMaterialReady(false);let value=10;const timer=setInterval(()=>{value=Math.min(100,value+18);setMaterialProgress(value);if(value>=100){clearInterval(timer);setMaterialReady(true);}},120);}}>生成</Button>{materialProgress>0&&<Progress percent={materialProgress} status={materialProgress<100?'active':'success'}/>} {materialReady&&<div style={{height:180,display:'grid',placeItems:'center',background:'linear-gradient(135deg,#e6f4ff,#f9f0ff)',borderRadius:8,fontSize:64}}>◈</div>}</Modal></>;
 }
 
 import { DOCUMENT_BASE_QUALITY_RULES, DOCUMENT_PRIVACY_QUALITY_RULES, DOCUMENT_SCENE_QUALITY_RULES } from '../documentQualityCatalog';
@@ -403,7 +420,7 @@ function DocumentQualityPanelLegacy({ draft, onDraftChange }) {
     <Row gutter={[12,12]}>{baseRules.map(rule=><Col span={6} key={rule.id}><Card size="small" className={`conversation-fixed-rule ${rule.privacy?'conversation-fixed-rule-privacy':'conversation-fixed-rule-other'}`} style={{height:'100%'}}><Space direction="vertical"><Space><Text strong>{rule.name}</Text><Tag color={rule.privacy?'blue':'green'}>{rule.privacy?'隐私检查':'基础规则'}</Tag></Space><Text type="secondary">{rule.description}</Text><Tag>{rule.id}</Tag></Space></Card></Col>)}</Row>
     <Divider orientation="left">场景规则</Divider>
 <div className="template-section-heading"><strong>场景规则</strong><Button type="primary" icon={<PlusOutlined/>} onClick={()=>updateRules([...rules,{rule_id:`SCENE-${Date.now().toString(36).toUpperCase()}`,name:'自定义场景规则',target:'两者',mode:'semantic',threshold:0.8,prompt:'',enabled:true}])}>添加自定义质检规则</Button></div>
-    {rules.map((rule,index)=><Card key={rule.rule_id} size="small" className="conversation-quality-rule" extra={<Switch checked={rule.enabled!==false} onChange={enabled=>patch(index,{enabled})}/>}><Row gutter={12}><Col span={7}><Text type="secondary">规则名称</Text><Input placeholder="请输入规则名称" value={rule.name} onChange={event=>patch(index,{name:event.target.value})}/></Col><Col span={6}><Text type="secondary">规则 ID</Text><Input value={rule.rule_id} disabled/></Col><Col span={5}><Text type="secondary">检查对象</Text><Select placeholder="请选择检查对象" value={rule.target} onChange={target=>patch(index,{target})} style={{width:'100%'}} options={['版面结构','字段内容','两者'].map(value=>({value,label:value}))}/></Col><Col span={6}><Text type="secondary">检查方式</Text><Select placeholder="请选择检查方式" value={rule.mode} onChange={mode=>patch(index,{mode})} style={{width:'100%'}} options={[{value:'function',label:'函数判断'},{value:'semantic',label:'语义判断'}]}/></Col></Row>{rule.mode==='semantic'?<><Text type="secondary">语义阈值</Text><InputNumber placeholder="请输入语义阈值（0～1）" min={0} max={1} step={0.01} value={rule.threshold} onChange={threshold=>patch(index,{threshold})}/><Text type="secondary">语义判断 Prompt</Text><Input.TextArea placeholder="请输入语义判断 Prompt" rows={4} value={rule.prompt} onChange={event=>patch(index,{prompt:event.target.value})}/><Row gutter={12}><Col span={12}><Text type="secondary">通过示例（可选）</Text><Input.TextArea placeholder="请输入通过示例" rows={2} value={rule.positive_example} onChange={event=>patch(index,{positive_example:event.target.value})}/></Col><Col span={12}><Text type="secondary">不通过示例（可选）</Text><Input.TextArea placeholder="请输入不通过示例" rows={2} value={rule.negative_example} onChange={event=>patch(index,{negative_example:event.target.value})}/></Col></Row></>:<><Text type="secondary">Python 判断函数</Text><Input.TextArea placeholder="请输入Python 判断函数" className="coldchain-code-textarea" rows={6} value={rule.python_code||'def validate(data, context):\n    return True'} onChange={event=>patch(index,{python_code:event.target.value})}/></>}</Card>)}
+    {rules.map((rule,index)=><Card key={rule.rule_id} size="small" className="conversation-quality-rule" extra={<Switch checked={rule.enabled!==false} onChange={enabled=>patch(index,{enabled})}/>}><Row gutter={12}><Col span={7}><Text type="secondary">规则名称</Text><Input placeholder="请输入规则名称" value={rule.name} onChange={event=>patch(index,{name:event.target.value})}/></Col><Col span={6}><Text type="secondary">规则 ID</Text><Input value={rule.rule_id} disabled/></Col><Col span={5}><Text type="secondary">检查对象</Text><Select placeholder="请选择检查对象" value={rule.target} onChange={target=>patch(index,{target})} style={{width:'100%'}} options={['版面结构','字段内容','两者'].map(value=>({value,label:value}))}/></Col><Col span={6}><Text type="secondary">检查方式</Text><Select placeholder="请选择检查方式" value={rule.mode} onChange={mode=>patch(index,{mode})} style={{width:'100%'}} options={[{value:'function',label:'函数判断'},{value:'semantic',label:'语义判断'}]}/></Col></Row>{rule.mode==='semantic'?<><Text type="secondary">语义阈值</Text><InputNumber placeholder="请输入语义阈值（0～1）" min={0} max={1} step={0.01} value={rule.threshold} onChange={threshold=>patch(index,{threshold})}/><Text type="secondary">语义判断 Prompt</Text><Input.TextArea placeholder="请输入语义判断 Prompt" rows={4} value={rule.prompt} onChange={event=>patch(index,{prompt:event.target.value})} allowClear/><Row gutter={12}><Col span={12}><Text type="secondary">通过示例（可选）</Text><Input.TextArea placeholder="请输入通过示例" rows={2} value={rule.positive_example} onChange={event=>patch(index,{positive_example:event.target.value})} allowClear/></Col><Col span={12}><Text type="secondary">不通过示例（可选）</Text><Input.TextArea placeholder="请输入不通过示例" rows={2} value={rule.negative_example} onChange={event=>patch(index,{negative_example:event.target.value})} allowClear/></Col></Row></>:<><Text type="secondary">Python 判断函数</Text><Input.TextArea placeholder="请输入Python 判断函数" className="coldchain-code-textarea" rows={6} value={rule.python_code||'def validate(data, context):\n    return True'} onChange={event=>patch(index,{python_code:event.target.value})} allowClear/></>}</Card>)}
     
   </Space>;
 }
@@ -496,6 +513,7 @@ export default function TemplateEditor({ job, open, onClose, onUpdated, presenta
   const activeJob = currentJob?.id === job?.id ? currentJob : job;
   const editorReady = Boolean(draft && currentJob?.id === job?.id);
   const published = Boolean(activeJob?.result?.published_template);
+  useEffect(()=>{setLeaveDirty(open&&dirty&&!readOnly&&!published);return()=>setLeaveDirty(false);},[open,dirty,readOnly,published]);
   const hasAnalysisStep = Boolean(analysisInfo);
   const editorStep = hasAnalysisStep ? step - 1 : step;
   const visibleStepItems = hasAnalysisStep ? [{ title: '版面分析与语义提取', description: 'OCR + Qwen 整单推理' }, ...stepItems] : stepItems;
@@ -702,7 +720,7 @@ export default function TemplateEditor({ job, open, onClose, onUpdated, presenta
     Modal.confirm({
       title: '恢复系统初稿？',
       content: '此操作会覆盖全部未发布编辑，并恢复为系统生成的初始草稿。该操作适合在当前编辑不可恢复时使用。',
-      okText: '恢复系统初稿', okButtonProps: { danger: true }, cancelText: '取消',
+      okText: '恢复系统初稿', okType: 'danger', cancelText: '取消',
       onOk: async () => {
         setAction('restore-system');
         try {
@@ -756,7 +774,7 @@ export default function TemplateEditor({ job, open, onClose, onUpdated, presenta
   };
   const requestClose = () => {
     if (!dirty) return onClose();
-    Modal.confirm({ title: '草稿尚未保存', content: '关闭后本次修改会丢失。', okText: '放弃修改并关闭', okButtonProps: { danger: true }, cancelText: '继续编辑', onOk: onClose });
+    Modal.confirm({ title: '有未保存的修改，确定离开吗？', content: '离开后本次未保存的修改会丢失。', okText: '放弃修改', okType: 'danger', cancelText: '继续编辑', onOk: onClose });
   };
   if (!job) return null;
   const sourceUrl = activeJob?.artifact_urls?.input ? templateApi.artifactUrl(activeJob.artifact_urls.input) : '';
@@ -778,7 +796,7 @@ export default function TemplateEditor({ job, open, onClose, onUpdated, presenta
 
   const editorContent = <>
     {loading || !editorReady ? <div className="template-editor-loading"><Spin tip="正在读取模板草稿"/></div> : <>
-      <Flex justify="space-between" align="center" className="template-editor-header template-editor-step-actions-top"><div><Title level={4}>{activeJob.name}</Title><Text type="secondary">ID：{activeJob.id}</Text></div><Space>{!readOnly&&<Button onClick={requestClose}>取消</Button>}<Button icon={<ArrowLeftOutlined/>} disabled={step === 0 && !onBackToUpload} onClick={() => changeStep(Math.max(0, step - 1))}>上一步</Button>{readOnly?<Button type="primary" icon={<ArrowRightOutlined/>} disabled={step===maxStep} onClick={()=>{setStep(value=>Math.min(maxStep,value+1));setSelection(null);}}>下一步</Button>:<><Button icon={<SaveOutlined/>} disabled={!editorReady || !dirty || published} loading={action === 'save'} onClick={save}>保存草稿</Button><Tooltip title={step===maxStep&&draft?.trial_run?.rule_report&&!templatePrivacyCheck(draft.trial_run.rule_report).passed?'模板隐私检查不通过，请修改后重新试运行':''}><span><Button type="primary" icon={step === maxStep && currentTrialReady ? <SafetyCertificateOutlined/> : <ArrowRightOutlined/>} disabled={published||(step===maxStep&&draft?.trial_run?.rule_report&&!templatePrivacyCheck(draft.trial_run.rule_report).passed)} loading={step === maxStep ? ['save','trial','publish'].includes(action) : action === 'save'} onClick={advanceOrFinish}>{step === maxStep ? finalActionLabel : '下一步'}</Button></span></Tooltip></>}</Space></Flex>
+      <Flex justify="space-between" align="center" className="template-editor-header template-editor-step-actions-top"><div><Text type="secondary">ID：{activeJob.id}</Text></div><Space>{!readOnly&&<Button onClick={requestClose}>取消</Button>}<Button icon={<ArrowLeftOutlined/>} disabled={step === 0 && !onBackToUpload} onClick={() => changeStep(Math.max(0, step - 1))}>上一步</Button>{readOnly?<Button type="primary" icon={<ArrowRightOutlined/>} disabled={step===maxStep} onClick={()=>{setStep(value=>Math.min(maxStep,value+1));setSelection(null);}}>下一步</Button>:<><Button icon={<SaveOutlined/>} disabled={!editorReady || !dirty || published} loading={action === 'save'} onClick={save}>保存草稿</Button><Tooltip title={step===maxStep&&draft?.trial_run?.rule_report&&!templatePrivacyCheck(draft.trial_run.rule_report).passed?'模板隐私检查不通过，请修改后重新试运行':''}><span><Button type="primary" icon={step === maxStep && currentTrialReady ? <SafetyCertificateOutlined/> : <ArrowRightOutlined/>} disabled={published||(step===maxStep&&draft?.trial_run?.rule_report&&!templatePrivacyCheck(draft.trial_run.rule_report).passed)} loading={step === maxStep ? ['save','trial','publish'].includes(action) : action === 'save'} onClick={advanceOrFinish}>{step === maxStep ? finalActionLabel : '下一步'}</Button></span></Tooltip></>}</Space></Flex>
       <Steps current={step} items={visibleStepItems} onChange={changeStep} className="template-editor-steps"/>
       {published && <Alert type="success" showIcon message="模板已经发布" description="当前页面以只读方式展示已发布内容。"/>}
       {hasAnalysisStep && step === 0 ? <AnalysisSummary job={activeJob} analysisInfo={analysisInfo} sourceUrl={sourceUrl} onContinue={() => changeStep(1)}/> : editorStep === 2 ? <Card className="template-editor-quality-page" title="质检规则配置"><DocumentQualityPanel draft={draft} readOnly={readOnly||published} onDraftChange={updateDraft}/></Card> : editorStep === 3 ? <Card className="template-editor-quality-page" title="试运行与发布"><ValidationPanel draft={draft} job={activeJob} onDraftChange={updateDraft} onTrial={trial} trialRunning={action==='trial'}/></Card> : <EditorWorkspace>
@@ -813,7 +831,7 @@ export default function TemplateEditor({ job, open, onClose, onUpdated, presenta
     </Modal>
   </>;
   if (presentation === 'page') return <div className="template-editor-page">
-    <Flex className="page-header" justify="space-between" align="flex-start"><Space align="start"><Button type="text" icon={<LeftOutlined/>} aria-label="返回模板中心" onClick={requestClose}/><div><Title level={2}>{readOnly?'文档类图像模板详情':'编辑文档类图像模板'}</Title><Paragraph type="secondary">{readOnly?'只读查看模板内容，可使用上一步和下一步浏览全部配置。':'修改模板草稿内容并完成试运行与发布。'}</Paragraph></div></Space></Flex>
+    <Flex className="page-header" justify="space-between" align="flex-start"><Space align="start"><Button type="text" icon={<LeftOutlined/>} aria-label="返回模板中心" onClick={requestClose}/><div><Title level={2}>{readOnly?'文档类图像模板详情':'编辑文档类图像模板'}</Title>{!readOnly&&<Paragraph type="secondary">修改模板草稿内容并完成试运行与发布。</Paragraph>}</div></Space></Flex>
     {editorContent}
   </div>;
   return <Drawer className={`template-editor-drawer${readOnly ? ' template-editor-readonly' : ''}`} title="表格类模板编辑器" size="96vw" open={open} onClose={requestClose}>{editorContent}</Drawer>;

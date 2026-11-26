@@ -5,9 +5,9 @@ import { PlusOutlined } from '@ant-design/icons';
 const { Text } = Typography;
 
 export const DEFAULT_BUSINESS_TYPES = {
-  document_image: ['报关单', '检疫证书', '运单', '库存清单', '质检单'],
+  document_image: ['运单', '装箱单', '提单', '库存清单', '质检单'],
   conversation: ['咨询问答', '信息收集', '异常反馈', '投诉售后', '人工协作'],
-  time_series: ['冷藏集装箱物流', 'GPS轨迹数据', '温湿度数据', '振动数据'],
+  time_series: ['温湿度时序数据', 'GPS轨迹数据', '振动与冲击信号模拟'],
 };
 
 const STORAGE_PREFIX = 'data-factory:business-types:v1:';

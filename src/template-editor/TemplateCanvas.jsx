@@ -1,6 +1,7 @@
 import React, { useEffect, useMemo, useState, useRef } from 'react';
 import { Circle, Image as KonvaImage, Layer, Line, Rect, Stage, Text as KonvaText } from 'react-konva';
 import { moveBox, snapBox } from './templateGeometry';
+import {handwritingPreview} from '../handwriting.js';
 
 function useBrowserImage(url) {
   const [image, setImage] = useState(null);
@@ -22,6 +23,13 @@ const layerColors = {
 };
 
 const asManual = item => ({ ...item, locked: true, source: { kind: 'manual', reason: 'user_edit' } });
+
+function HandwritingImage({item,draft,scale}) {
+  const preview=handwritingPreview(item,draft);
+  const image=useBrowserImage(preview.url);
+  const [x,y,r,b]=item.bbox_px.map(v=>v*scale);
+  return image?<KonvaImage image={image} x={x} y={y} width={r-x} height={b-y} listening={false}/>:null;
+}
 
 function BorderLines({ cell, scale }) {
   const [x1, y1, x2, y2] = cell.bbox_px.map(value => value * scale);
@@ -165,7 +173,7 @@ export default function TemplateCanvas({ draft, sourceUrl, visibility, privacyVi
           return <React.Fragment key={item.id}>
             <Rect x={x1} y={y1} width={x2 - x1} height={y2 - y1} fill="rgba(212,56,13,.08)" stroke={layerColors.asset} strokeWidth={selected ? 3 : 1} dash={[8, 4]}
               draggable onClick={() => onSelection({ kind: 'asset', id: item.id })} onDragEnd={event => move('asset', item, event)}/>
-            <KonvaText x={x1 + 4} y={y1 + 4} text={item.asset_type || '图案'} fill="#a8071a" fontSize={Math.max(10, 13 * zoom)} listening={false}/>
+            {item.asset_type==='handwriting'?<HandwritingImage item={item} draft={draft} scale={scale}/>:<KonvaText x={x1 + 4} y={y1 + 4} text={item.asset_type || '图案'} fill="#a8071a" fontSize={Math.max(10, 13 * zoom)} listening={false}/>}
           </React.Fragment>;
         })}
         {selection?.kind === 'asset' && selectedObject && <CornerHandles box={selectedObject.bbox_px} scale={scale} onCorner={(corner, point) => resizeGeneric('asset', selectedObject, corner, point)}/>} 

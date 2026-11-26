@@ -22,6 +22,12 @@ export const PROVIDERS = {
     baseUrl: 'https://{WorkspaceId}.cn-beijing.maas.aliyuncs.com/compatible-mode/v1',
     hint: 'Base URL 与 API Key 地域必须一致，并替换业务空间 WorkspaceId。',
   },
+  doubao: {
+    key: 'doubao', name: '豆包', subtitle: '火山方舟', badge: '官方',
+    initials: '豆包', color: '#1677ff', background: '#e6f4ff',
+    baseUrl: 'https://ark.cn-beijing.volces.com/api/v3',
+    hint: '使用火山方舟 API Key；图像生成模型与模板中的豆包 Seedream 5.0 保持一致。',
+  },
   zhilian: {
     key: 'zhilian', name: '智链', subtitle: '客户内部基模', badge: '内部',
     initials: 'ZL', color: '#1677ff', background: '#e6f4ff',
@@ -51,8 +57,8 @@ export const INITIAL_KEYS = [
   {
     id: 'KEY-0002', name: '百炼主账号', provider: 'qwen',
     baseUrl: 'https://llm-demo.cn-beijing.maas.aliyuncs.com/compatible-mode/v1',
-    protocol: 'OpenAI 兼容', models: ['qwen3.7-max', 'qwen-vl-max'], keyTail: 'M8QK',
-    createdBy: 'feidongni', description: '文档理解和多模态任务',
+    protocol: 'OpenAI 兼容', models: ['qwen3.7-max', 'qwen-vl-max', 'qwen-image'], keyTail: 'M8QK',
+    createdBy: 'feidongni', description: '文档理解、多模态任务与图像生成',
   },
   {
     id: 'KEY-0003', name: '智链 UAT', provider: 'zhilian',
@@ -64,6 +70,12 @@ export const INITIAL_KEYS = [
     baseUrl: PROVIDERS.deepseek.baseUrl, protocol: 'OpenAI 兼容',
     models: ['deepseek-v4-flash', 'deepseek-reasoner'], keyTail: '2P9D',
     createdBy: 'feidongni', description: '推理任务备用通道',
+  },
+  {
+    id: 'KEY-0005', name: '豆包图像生成（示例）', provider: 'doubao',
+    baseUrl: PROVIDERS.doubao.baseUrl, protocol: 'OpenAI 兼容',
+    models: ['doubao-seedream-5-0-260128'], keyTail: '',
+    createdBy: 'feidongni', description: 'Seedream 5.0，用于模板底图生成；请编辑填写自己的 API Key',
   },
 ];
 
@@ -98,6 +110,7 @@ export function KeyEditor({ open, record, onCancel, onSave }) {
     form.setFieldsValue({
       provider: value, baseUrl: preset.baseUrl,
       name: record ? form.getFieldValue('name') : `${preset.name} 配置`,
+      models: value==='doubao'?['doubao-seedream-5-0-260128']:value==='qwen'?['qwen3.7-max','qwen-vl-max','qwen-image']:[''],
     });
   };
 
@@ -124,7 +137,6 @@ export function KeyEditor({ open, record, onCancel, onSave }) {
     <Alert
       type="info" showIcon className="api-form-note"
       title="仅支持 OpenAI 兼容协议"
-      description="前端原型不会连接外部服务；正式产品应由服务端加密保存完整密钥。"
     />
     <Form form={form} layout="vertical">
       <Row gutter={16}>
@@ -177,13 +189,21 @@ export function KeyEditor({ open, record, onCancel, onSave }) {
           </Form.Item>
         </>}
       </Form.List>
-      <Form.Item name="description" label="描述"><Input.TextArea rows={2} maxLength={120} showCount placeholder="说明使用环境、用途或负责人（可选）"/></Form.Item>
+      <Form.Item name="description" label="描述"><Input.TextArea rows={2} maxLength={120} showCount placeholder="说明使用环境、用途或负责人（可选）" allowClear/></Form.Item>
     </Form>
   </Modal>;
 }
 
 export function ApiKeysManager() {
-  const [records, setRecords] = useState(() => readStore('api-keys', INITIAL_KEYS));
+  const [records, setRecords] = useState(() => {
+    const existing=readStore('api-keys',INITIAL_KEYS);
+    if(readStore('api-image-models-v1',false))return existing;
+    const next=existing.map(record=>record.id==='KEY-0002'&&record.provider==='qwen'?{...record,models:[...new Set([...(record.models||[record.defaultModel].filter(Boolean)),'qwen-image'])]}:record);
+    if(!next.some(record=>record.provider==='doubao'))next.push({...INITIAL_KEYS.find(record=>record.provider==='doubao')});
+    writeStore('api-keys',next);
+    writeStore('api-image-models-v1',true);
+    return next;
+  });
   const [query, setQuery] = useState('');
   const [editing, setEditing] = useState(undefined);
   const [editorOpen, setEditorOpen] = useState(false);

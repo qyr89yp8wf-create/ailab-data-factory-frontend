@@ -156,7 +156,7 @@ ${values.toolInstructionsMarkdown || ''}
 }
 
 function MarkdownField({ name, label, rows = 6 }) {
-  return <Form.Item name={name} label={label} rules={[{required:true, whitespace:true, message:`请用 Markdown 填写${label}`}]}><Input.TextArea placeholder="请输入内容" rows={rows} showCount/></Form.Item>;
+  return <Form.Item name={name} label={label} rules={[{required:true, whitespace:true, message:`请用 Markdown 填写${label}`}]}><Input.TextArea placeholder="请输入内容" rows={rows} showCount allowClear/></Form.Item>;
 }
 
 export function ConversationPromptGenerationFields({ form }) {
@@ -203,11 +203,11 @@ export function ConversationPromptGenerationFields({ form }) {
       <Alert type="info" showIcon message="一个 [规则 ID] 就是一张规则卡" description="系统不会把普通段落自动拆卡，也不会改写用户规则。必填字段为：类型、名称、动作；ID 必须唯一。规则卡只在本任务中使用。"/>
       <Space wrap className="section-title"><Upload accept=".txt,text/plain" maxCount={1} beforeUpload={beforeUpload} showUploadList={false}><Button icon={<CloudUploadOutlined/>}>选择规则卡 TXT</Button></Upload><Tag color={ids.length ? 'green' : 'default'}>{ids.length ? `已加载 ${ids.length} 张` : '未加载'}</Tag><Text type="secondary">{form.getFieldValue('knowledgeFileName')}</Text></Space>
       <Row gutter={16} className="section-title"><Col span={12}><Form.Item name="knowledgeVersion" label="规则版本"><Input placeholder="请输入规则版本"/></Form.Item></Col><Col span={12}><Form.Item name="knowledgeEffectiveDate" label="生效日期"><Input placeholder="请输入生效日期" type="date"/></Form.Item></Col></Row>
-      <Form.Item name="knowledgeText" hidden><Input.TextArea/></Form.Item><Form.Item name="knowledgeFileName" hidden><Input/></Form.Item>
+      <Form.Item name="knowledgeText" hidden><Input.TextArea allowClear/></Form.Item><Form.Item name="knowledgeFileName" hidden><Input/></Form.Item>
     </Card> : <Card size="small" title={<Space><DatabaseOutlined/>外部 RAG 连接</Space>}>
       <Alert type="warning" showIcon message="本产品不创建 RAG 库" description="连接器、权限和召回由外部平台提供。本管线只接收已召回且带来源的冻结知识片段，随后生成 Prompt。当前本地 MVP 没有外部连接器时请选择规则卡 TXT。"/>
       <Row gutter={16} className="section-title"><Col span={8}><Form.Item name="ragConnectorId" label="连接器 ID" rules={[{required:true}]}><Input placeholder="由平台提供"/></Form.Item></Col><Col span={8}><Form.Item name="ragKnowledgeBaseId" label="知识库 ID" rules={[{required:true}]}><Input placeholder="由平台提供"/></Form.Item></Col><Col span={8}><Form.Item name="ragVersion" label="知识版本"><Input placeholder="请输入知识版本"/></Form.Item></Col></Row>
-      <Form.Item name="ragRetrievedContext" hidden><Input.TextArea/></Form.Item>
+      <Form.Item name="ragRetrievedContext" hidden><Input.TextArea allowClear/></Form.Item>
       <Badge status={form.getFieldValue('ragRetrievedContext') ? 'success' : 'default'} text={form.getFieldValue('ragRetrievedContext') ? '已收到冻结召回片段' : '等待外部平台注入冻结召回片段'}/>
     </Card>}
     <Divider orientation="left">事实、状态机与工具</Divider>

@@ -1,0 +1,18 @@
+import assert from 'node:assert/strict';
+import {sampleConstantValues,validateValueMode} from '../src/timeSeriesValueModes.js';
+import {COLDCHAIN_MODEL_FIELDS as fields,COLDCHAIN_MODEL_CONFIGURATION as template} from '../src/timeSeriesModelSeed.js';
+import {compileStage2,validateSeriesResult,DEMO_FROZEN_EVENT as event,PREVIEW_RUNTIME as runtime} from '../src/timeSeriesPromptCompiler.js';
+assert.equal(fields.length,7);
+assert.equal(fields.filter(f=>f.value_mode==='dynamic').length,5);
+assert.deepEqual(sampleConstantValues(fields,()=>0.25),{temperature_setpoint:4,ambient_temperature:24.5});
+assert.throws(()=>validateValueMode({type:'number',value_mode:'per_series',range_min:5,range_max:4}),/下限/);
+assert.throws(()=>validateValueMode({type:'integer',value_mode:'fixed',fixed_value:1.5}),/类型/);
+const compiled=compileStage2(template,runtime,{assignment:{event_type_id:'door_open'},event});
+const properties=compiled.userInput.output_schema.oneOf[0].properties.rows.items.properties;
+assert.equal('temperature_setpoint' in properties,false);
+assert.equal('ambient_temperature' in properties,false);
+const rows=Array.from({length:48},(_,index)=>({index,...Object.fromEntries(fields.filter(f=>f.value_mode==='dynamic').map(f=>[f.field_id,event.initial_values[f.field_id]]))}));
+const result=validateSeriesResult({status:'ok',rows},template,runtime,event);
+assert.ok(result.rows.every(row=>row.temperature_setpoint===4&&row.ambient_temperature===25));
+assert.deepEqual(Object.keys(result.rows[0]).sort(),['index','timestamp',...fields.map(f=>f.field_id)].sort());
+console.log('PASS value modes: sampling, bounds, reduced schema, program-filled constants');

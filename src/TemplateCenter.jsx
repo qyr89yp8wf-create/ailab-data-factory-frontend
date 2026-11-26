@@ -1,3 +1,4 @@
+import DocumentFirstStep from './DocumentFirstStep';
 import {FormModelConfig,ModelConfigField} from './ModelConfigField';
 import React, { useEffect, useMemo, useState } from 'react';
 import {demoTemplatePairs,ensureDemoDrafts} from './demoTemplatePairs';
@@ -9,7 +10,7 @@ import {
 import {
   ApartmentOutlined, ArrowLeftOutlined, CheckCircleOutlined, ClockCircleOutlined,
   CloudUploadOutlined, DownOutlined, FileImageOutlined, FileTextOutlined,
-  FundOutlined, LeftOutlined, PlusOutlined, SaveOutlined, SearchOutlined,
+  FundOutlined, LeftOutlined, PlusOutlined, ReloadOutlined, SaveOutlined, SearchOutlined,
 } from '@ant-design/icons';
 import { templateApi } from './templateApi';
 import TemplateEditor from './template-editor/TemplateEditor';
@@ -17,14 +18,14 @@ import { ConversationTemplateCreatePage, ConversationTemplateEditor } from './Co
 import { ColdChainTemplateCreatePage, ColdChainTemplateEditor } from './ColdChainTemplateCenter';
 import { SyntheticDocumentTemplateCreatePage } from './synthetic-template/SyntheticDocumentTemplateCreatePage';
 import { syntheticTemplateApi } from './syntheticTemplateApi';
-import { TemplateActionButtons } from './TemplateActionButtons';
 import { conversationApi } from './conversationApi';
 import { coldchainApi } from './coldchainApi';
 import WaybillSeedMockEditor from './WaybillSeedMockEditor';
 import ContractSeedMockEditor from './ContractSeedMockEditor';
 import { formatDateTime, nowDateTime } from './timeUtils';
-import { BusinessTypeSelect } from './BusinessTypeSelect';
+import { BusinessTypeSelect, DEFAULT_BUSINESS_TYPES } from './BusinessTypeSelect';
 import {templatePrivacyCheck} from './qualityResults';
+import {setLeaveDirty} from './leaveGuard';
 
 const { Title, Text, Paragraph } = Typography;
 
@@ -34,7 +35,9 @@ const taskTypes = [
   { value: 'time_series', label: '时序类数据', icon: <FundOutlined/>, description: '事件 Prompt → 输出参数 → 白名单规则引擎 → 发布', enabled: true },
 ];
 
-const LAYOUT_ANALYSIS_SEMANTIC_PROMPT = `你是“文档图像模板语义建模器”，不是通用 OCR 纠错器或简单文本分类器。输入包括：业务类型、整张种子文档图像、按阅读顺序排列的 OCR 文字对象，以及每个对象的 text_id、原始识别文本、bbox/polygon、所在表格单元格或版面区域、OCR 置信度和相邻对象。请先理解整张单据的版面结构与业务语义，再完成字段级建模。
+const LAYOUT_ANALYSIS_SEMANTIC_PROMPT = `当前演示为装箱单（PACKING LIST）。识别装箱方 issuer、关联发票号 invoice_no、合同号 contract_no、装箱日期 pl_date、收货方 to、唛头 item_marks、货名 item_description、件数 item_quantity、毛重 item_gw、净重 item_nw、总件数 total_qty、总毛重 total_gw、总净重 total_nw、签署栏 signature 共 14 个字段。明细与汇总分别核对，净重不得超过毛重，CTNS 与 TINS 不混加，重量统一为 kg；签署主体与装箱方一致。标题、表头、TOTAL 和声明为固定文字。
+
+你是“文档图像模板语义建模器”，不是通用 OCR 纠错器或简单文本分类器。输入包括：业务类型、整张种子文档图像、按阅读顺序排列的 OCR 文字对象，以及每个对象的 text_id、原始识别文本、bbox/polygon、所在表格单元格或版面区域、OCR 置信度和相邻对象。请先理解整张单据的版面结构与业务语义，再完成字段级建模。
 
 【必须完成的任务】
 1. 逐一处理所有 OCR 文字对象；每个 text_id 必须且只能输出一次，不得遗漏、合并、删除或虚构对象。
@@ -84,7 +87,7 @@ const BACKGROUND_GENERATION_SEMANTIC_PROMPT = `你是“底图生成法文档模
 本提示词用于完整表达产品目标。正式实现可拆分为：①底图分区与图层解析；②固定/动态文字分类及绑定；③字段生成规则编排；④字段质检、跨字段关系与隐私策略生成；⑤视觉位置和 JSON 契约复核。`;
 
 const TEMPLATE_TASK_REFERENCES = {
-  'DOC-TPL-FICT-CUSTOMS-MOCK': ['进口报关单批量合成任务', '报关单覆盖短板扩增任务'],
+  'DOC-TPL-FICT-CUSTOMS-MOCK': ['进口装箱单批量合成任务', '装箱单覆盖短板扩增任务'],
   'CONVTPL-LOGISTICS-DEMO-V2': ['物流客服多轮对话合成任务'],
   'COLDTPL-REEFER-MODEL-DEMO-V2': ['冷链温湿度异常序列合成任务'],
 };
@@ -110,9 +113,17 @@ function statusTag(job) {
 }
 
 const documentBusinessOptions = [
-  { label: '版面分析法', value: '报关单' },
+  { label: '版面分析法', value: '装箱单' },
   { label: '底图生成法', value: '运单' },
 ];
+
+const PRESET_DOCUMENT_TYPES = DEFAULT_BUSINESS_TYPES.document_image;
+// 根据业务类型判断制作方式锁定：运单→底图生成法；其它预置→版面分析法；自定义→可自由选择
+function documentMethodLock(businessType) {
+  if (!businessType) return null;
+  if (!PRESET_DOCUMENT_TYPES.includes(businessType)) return null; // 自定义业务类型，两种方式均可
+  return businessType === '运单' ? '运单' : '装箱单';
+}
 
 const waybillMockRows = [
   { key:'sender', area:'寄件信息区', objects:'寄件人、电话、地址', method:'PP-OCRv5 + 空间聚类', action:'保留为动态字段组' },
@@ -130,8 +141,8 @@ const contractMockRows = [
   { key:'sign', level:'签署区', sample:'签署方、日期、固定图案位', kind:'签署结构', action:'仅生成安全合成内容' },
 ];
 
-function SeedMockWorkspace({ type, fileName, name, businessType, description, onBack, onCancel }) {
-  if (type === '运单') return <WaybillSeedMockEditor fileName={fileName} templateName={name} businessType={businessType} description={description} onBack={onBack} onCancel={onCancel}/>;
+function SeedMockWorkspace({ type, fileName, name, businessType, description, firstStepValues, onBack, onCancel }) {
+  if (type === '运单') return <WaybillSeedMockEditor fileName={fileName} templateName={name} businessType={businessType} description={description} onBack={onCancel||onBack} onBackToFirst={onBack} firstStepValues={firstStepValues} initialStep={1} onCancel={onCancel}/>;
   if (type === '合同') return <ContractSeedMockEditor fileName={fileName} onBack={onBack} onCancel={onCancel}/>;
   const [phase, setPhase] = useState(1);
   const [selected, setSelected] = useState(type === '运单' ? waybillMockRows.map(item => item.key) : contractMockRows.map(item => item.key));
@@ -185,9 +196,14 @@ function DocumentTemplateCreatePage({ onBack, onCreated, onUpdated, existingJob 
   const [submitting, setSubmitting] = useState(false);
   const [savingDraft, setSavingDraft] = useState(false);
   const [backgroundDraft, setBackgroundDraft] = useState(null);
+  const [baseImagePreview, setBaseImagePreview] = useState('');
+  const [generatingBase, setGeneratingBase] = useState(false);
+  const [baseImageProgress, setBaseImageProgress] = useState(0);
   const fileList = Form.useWatch('seedFile', {form,preserve:true}) || [];
   const semanticParamsEnabled = Form.useWatch('semanticParamsEnabled', form);
-  const businessType = Form.useWatch('businessType', form) || '报关单';
+  const businessType = Form.useWatch('businessType', form) || '装箱单';
+  const documentBusinessType = Form.useWatch('documentBusinessType', form) || '装箱单';
+  const methodLock = documentMethodLock(documentBusinessType);
   const [privacyProgress,setPrivacyProgress]=useState(0);
   const [imageDimensions,setImageDimensions]=useState('等待上传');
   const [mockWorkspace, setMockWorkspace] = useState(null);
@@ -209,6 +225,29 @@ function DocumentTemplateCreatePage({ onBack, onCreated, onUpdated, existingJob 
     if(file instanceof Blob){const url=URL.createObjectURL(file);const image=new window.Image();image.onload=()=>{setImageDimensions(`${image.naturalWidth} × ${image.naturalHeight}`);form.setFieldValue('imgsz',Math.max(image.naturalWidth,image.naturalHeight));URL.revokeObjectURL(url);};image.src=url;}
     return()=>clearInterval(timer);
   },[fileList,form]);
+  const generateBaseImage = async () => {
+    const values = form.getFieldsValue(true);
+    if (!values.imageGenerationModel) { message.warning('请先选择图像生成模型'); return; }
+    if (!String(values.baseImagePrompt || '').trim()) { message.warning('请先填写底图生成提示词'); return; }
+    setGeneratingBase(true);
+    setBaseImageProgress(0);
+    setBaseImagePreview('');
+    try {
+      let progress = 0;
+      await new Promise(resolve => {
+        const timer = setInterval(() => {
+          progress = Math.min(100, progress + 14);
+          setBaseImageProgress(progress);
+          if (progress >= 100) { clearInterval(timer); resolve(); }
+        }, 120);
+      });
+      setBaseImagePreview(`${import.meta.env.BASE_URL}assets/template-mock/orange-waybill-base.png`);
+      message.success('底图生成完成，可预览或重新生成');
+    } finally {
+      setGeneratingBase(false);
+    }
+  };
+
   const saveBackgroundDraft = async () => {
     const values = form.getFieldsValue(true);
     if (values.businessType !== '运单') return;
@@ -237,6 +276,7 @@ function DocumentTemplateCreatePage({ onBack, onCreated, onUpdated, existingJob 
         ? await syntheticTemplateApi.saveDraft(backgroundDraft.id, { ...payload, expected_revision: backgroundDraft.revision })
         : await syntheticTemplateApi.createDraft(payload);
       setBackgroundDraft(saved);
+      setUploadDirty(false);
       if (backgroundDraft) onUpdated(saved); else onCreated(saved);
       message.success(backgroundDraft ? '草稿已更新' : '草稿已保存');
     } catch (error) {
@@ -245,11 +285,30 @@ function DocumentTemplateCreatePage({ onBack, onCreated, onUpdated, existingJob 
       setSavingDraft(false);
     }
   };
+  const requestClose = () => {
+    if (!uploadDirty) { onBack(); return; }
+    Modal.confirm({ title: '有未保存的修改，确定离开吗？', content: '离开后本次未保存的修改会丢失。', okText: '放弃修改', okType: 'danger', cancelText: '继续编辑', onOk: onBack });
+  };
+  useEffect(()=>{setLeaveDirty(uploadDirty);return()=>setLeaveDirty(false);},[uploadDirty]);
+  const saveDocumentDraft = async () => {
+    const values = await form.validateFields();
+    if (values.businessType === '运单') { await saveBackgroundDraft(); return; }
+    const file = values.seedFile?.[0]?.originFileObj || values.seedFile?.[0];
+    if (!file) { message.warning('请先上传种子图片'); return; }
+    setSubmitting(true);
+    try {
+      const created = await templateApi.createJob({ existingJobId: job?.id, file, name: values.name, taskType: 'document_image', businessType: values.documentBusinessType, imgsz: values.imgsz, conf: values.conf, semanticModel: values.semanticModel, semanticPrompt:values.semanticPrompt, ...(values.semanticParamsEnabled?{semanticParameters:JSON.parse(values.semanticParamsJson)}:{}) });
+      const info = { name: values.name, businessType: values.documentBusinessType, description:values.description, fileName: file.name, imgsz: values.imgsz, conf: values.conf, semanticModel: values.semanticModel, promptVersion: semanticConfig?.prompt_version };
+      setUploadDirty(false); setAnalyzedInput(JSON.stringify(values)); setAnalysisInfo(info); setJob(created); onCreated(created);
+      message.success('草稿已保存');
+    } catch (error) { message.error(error.message); }
+    finally { setSubmitting(false); }
+  };
   const submit = async () => {
     const values = await form.validateFields();
     if (job && (!uploadDirty || analyzedInput === JSON.stringify(values))) { setUploadEditing(false); return; }
     const file = values.seedFile?.[0]?.originFileObj || values.seedFile?.[0];
-    if (values.businessType !== '报关单') {
+    if (values.businessType !== '装箱单') {
       setMockWorkspace({ type: values.businessType, fileName:'系统生成安全底图.png', name:values.name, businessType:values.documentBusinessType, description:values.description, imageModel:values.imageGenerationModel, imagePrompt:values.baseImagePrompt });
       message.success('底图生成法字段解析完成');
       return;
@@ -267,7 +326,7 @@ function DocumentTemplateCreatePage({ onBack, onCreated, onUpdated, existingJob 
     } catch (error) { message.error(error.message); }
     finally { setSubmitting(false); }
   };
-  if (mockWorkspace) return <SeedMockWorkspace {...mockWorkspace} onBack={()=>setMockWorkspace(null)} onCancel={onBack}/>;
+  if (mockWorkspace) return <SeedMockWorkspace {...mockWorkspace} firstStepValues={form.getFieldsValue(true)} onBack={()=>setMockWorkspace(null)} onCancel={onBack}/>;
   if (job && !uploadEditing) return <TemplateEditor presentation="page" job={job} open analysisInfo={analysisInfo} onBackToUpload={()=>setUploadEditing(true)} onClose={onBack} onUpdated={updated => { setJob(updated); onUpdated(updated); }}/>;
   const analysisSteps = businessType === '运单' ? [
     { title:'基础信息与种子图片', description:'选择底图生成法' },
@@ -282,37 +341,11 @@ function DocumentTemplateCreatePage({ onBack, onCreated, onUpdated, existingJob 
     { title:'校验试运行', description:'确认后发布' },
   ];
   return <div className="template-create-page document-template-create-page">
-    <Flex className="page-header" justify="space-between" align="flex-start"><Space align="start"><Button type="text" icon={<LeftOutlined/>} aria-label="返回模板中心" onClick={onBack}/><div><Title level={2}>{existingJob?'编辑文档类图像模板':'新建文档类图像模板'}</Title><Paragraph type="secondary">配置模板基础信息并选择版式制作方式</Paragraph></div></Space></Flex>
-    <Flex justify="space-between" align="center" className="conversation-template-statusbar template-editor-step-actions-top"><span/><Space><Button onClick={onBack} disabled={submitting||savingDraft}>取消</Button>{businessType==='运单'&&<Button icon={<SaveOutlined/>} loading={savingDraft} onClick={saveBackgroundDraft}>{backgroundDraft?'更新草稿':'保存草稿'}</Button>}<Button type="primary" disabled={businessType==='报关单'&&(!fileList.length||privacyProgress<100)} loading={submitting} onClick={submit}>{submitting ? '正在处理' : '下一步'}</Button></Space></Flex>
-    <Form form={form} onValuesChange={()=>setUploadDirty(true)} layout="vertical" initialValues={{ businessType: '报关单', name:'进口货物申报单图像模板', documentBusinessType:'报关单', description:'用于制作贸易申报单类文档图像模板，覆盖版面结构识别、业务字段提取、动态内容替换与合成数据生成。', imgsz: 1024, conf: 0.2, semanticModel: 'qwen3-vl-8b-instruct', semanticPrompt:LAYOUT_ANALYSIS_SEMANTIC_PROMPT, semanticParamsEnabled:false, semanticParamsJson:'{\n  "temperature": 0.2\n}', imageGenerationModel:'doubao-seedream-5-0-260128', baseImagePrompt:'生成一张横向橙色系国内快递运单空白底图，画布比例约为 1.84:1。左侧保留装订孔和虚线撕口；顶部放置安全虚构的“橙途速运 / ORANGEWAY EXPRESS”标识、不可追踪的合成条形码和二维码；主体使用橙色细线划分左右寄收件区、物品与重量体积区、付款费用区、签收与备注区；底部保留橙色服务条和“演示样张 / DEMO”标识。表格内部不得生成字段标签或字段值，所有固定文字和动态内容由后续文字层叠加；不得出现真实企业、真实个人信息或有效物流编码。', ...(existingJob?{name:existingJob.name,documentBusinessType:existingJob.business_type,seedFile:[{uid:existingJob.id,name:existingJob.input?.original_filename||'已上传种子图片',status:'done'}],imgsz:existingJob.parameters?.imgsz||1024,conf:existingJob.parameters?.conf??0.2,semanticModel:existingJob.parameters?.semantic_model||'qwen3-vl-8b-instruct'}:{}) }} className="template-analysis-form">
+    <Flex className="page-header" justify="space-between" align="flex-start"><Space align="start"><Button type="text" icon={<LeftOutlined/>} aria-label="返回模板中心" onClick={requestClose}/><div><Title level={2}>{existingJob?'编辑文档类图像模板':'新建文档类图像模板'}</Title></div></Space></Flex>
+    <Flex justify="space-between" align="center" className="conversation-template-statusbar template-editor-step-actions-top"><Text type="secondary">{(existingJob?.id||job?.id)?`ID：${existingJob?.id||job?.id}`:''}</Text><Space><Button icon={<ArrowLeftOutlined/>} disabled>上一步</Button><Button onClick={requestClose} disabled={submitting||savingDraft}>取消</Button><Button icon={<SaveOutlined/>} loading={savingDraft||submitting} onClick={saveDocumentDraft}>{backgroundDraft?'更新草稿':'保存草稿'}</Button><Button type="primary" disabled={businessType==='装箱单'&&(!fileList.length||privacyProgress<100)} loading={submitting} onClick={submit}>{submitting ? '正在处理' : '下一步'}</Button></Space></Flex>
+    <Form form={form} onValuesChange={(changed) => { setUploadDirty(true); if ('baseImagePrompt' in changed || 'imageGenerationModel' in changed || 'businessType' in changed) setBaseImagePreview(''); }} layout="vertical" initialValues={{ businessType: '装箱单', name:'', documentBusinessType:'装箱单', description:'', imgsz: 1024, conf: 0.2, semanticModel: 'qwen3-vl-8b-instruct', semanticPrompt:LAYOUT_ANALYSIS_SEMANTIC_PROMPT, semanticParamsEnabled:false, semanticParamsJson:'{\n  "temperature": 0.2\n}', imageGenerationModel:'doubao-seedream-5-0-260128', baseImagePrompt:'生成一张横向橙色系国内快递运单空白底图，画布比例约为 1.84:1。左侧保留装订孔和虚线撕口；顶部放置安全虚构的“橙途速运 / ORANGEWAY EXPRESS”标识、不可追踪的合成条形码和二维码；主体使用橙色细线划分左右寄收件区、物品与重量体积区、付款费用区、签收与备注区；底部保留橙色服务条和“演示样张 / DEMO”标识。表格内部不得生成字段标签或字段值，所有固定文字和动态内容由后续文字层叠加；不得出现真实企业、真实个人信息或有效物流编码。', ...(existingJob?{name:existingJob.name,documentBusinessType:existingJob.business_type,seedFile:[{uid:existingJob.id,name:existingJob.input?.original_filename||'已上传种子图片',status:'done'}],imgsz:existingJob.parameters?.imgsz||1024,conf:existingJob.parameters?.conf??0.2,semanticModel:existingJob.parameters?.semantic_model||'qwen3-vl-8b-instruct'}:{}) }} className="template-analysis-form">
       <Steps current={0} items={analysisSteps} className="template-editor-steps main-card"/>
-      <Card className="main-card" title="模板基础信息">
-        <Row gutter={16}><Col span={12}><Form.Item name="name" label="模板名称" rules={[{ required: true, message: '请输入模板名称' }, { max: 80 }]}><Input placeholder="例如：进口货物申报单模板"/></Form.Item></Col><Col span={12}><Form.Item name="documentBusinessType" label="业务类型" rules={[{required:true,message:'请选择业务类型'}]}><BusinessTypeSelect modality="document_image"/></Form.Item></Col></Row>
-        <Form.Item name="description" label="模板描述" rules={[{max:500}]}><Input.TextArea rows={3} maxLength={500} showCount placeholder="例如：用于制作贸易申报单类文档图像模板，覆盖版面分析、字段提取和合成数据生成。"/></Form.Item>
-      </Card>
-      <Card className="main-card" title="版面分析与语义提取">
-        <Form.Item name="businessType" label="模板制作方式" rules={[{ required: true, message:'请选择模板制作方式' }]}>
-          <Segmented block options={documentBusinessOptions} onChange={value=>form.setFieldsValue(value==='运单'?{businessType:value,seedFile:[],name:'物流运单底图生成模板',documentBusinessType:'运单',description:'用于生成虚构物流运单文档图像，覆盖寄件、收件、货物、费用、签收和条码等版面区域。',semanticPrompt:BACKGROUND_GENERATION_SEMANTIC_PROMPT}:{businessType:value,seedFile:[],name:'进口货物申报单图像模板',documentBusinessType:'报关单',description:'用于制作贸易申报单类文档图像模板，覆盖版面结构识别、业务字段提取、动态内容替换与合成数据生成。',semanticPrompt:LAYOUT_ANALYSIS_SEMANTIC_PROMPT})}/>
-        </Form.Item>
-        <Alert className="template-modal-note" type="info" showIcon message={businessType === '报关单' ? '版面分析法' : '底图生成法'} description={businessType === '报关单' ? '上传种子图片，通过版面检测、OCR、结构校准和字段配置制作模板。' : '解析业务字段并基于平台生成的安全底图进行在线编辑，不复制真实品牌或版面。'}/>
-      {businessType === '运单' && <Form.Item name="backgroundSeedFile" label="上传参考底图" valuePropName="fileList" getValueFromEvent={event => Array.isArray(event) ? event : event?.fileList} rules={[{ required: true, message: '请上传参考底图' }]}><Upload.Dragger accept=".png,.jpg,.jpeg,.webp,.bmp" maxCount={1} beforeUpload={() => false}><p className="ant-upload-drag-icon"><CloudUploadOutlined /></p><p>拖拽或点击选择底图</p><p className="ant-upload-hint">底图生成法将使用该图片作为参考</p></Upload.Dragger></Form.Item>}
-      {businessType==='运单'&&<Card size="small" title="底图生成配置" className="template-editor-card"><ModelConfigField><Form.Item name="imageGenerationModel" label="图像生成模型" rules={[{required:true}]}><Select placeholder="请选择图像生成模型" options={[{value:'doubao-seedream-5-0-260128',label:'豆包 Seedream 5.0（doubao-seedream-5-0-260128）'}]}/></Form.Item></ModelConfigField><Form.Item name="baseImagePrompt" label="底图生成提示词" rules={[{required:true,whitespace:true,message:'请输入底图生成提示词'}]}><Input.TextArea placeholder="描述底图生成提示词，说明目标、约束和输出要求" rows={7}/></Form.Item></Card>}
-      {businessType==='报关单'&&<Form.Item name="seedFile" label="上传种子图片" valuePropName="fileList" getValueFromEvent={event => Array.isArray(event) ? event : event?.fileList} rules={[{ required: true, message: '请上传种子图片' }]}>
-        <Upload.Dragger accept=".png,.jpg,.jpeg,.webp,.bmp,.tif,.tiff" maxCount={1} beforeUpload={() => false}>
-          <p className="ant-upload-drag-icon"><CloudUploadOutlined/></p><p>拖入或点击选择一张文档图片</p><p className="ant-upload-hint">支持 PNG/JPEG/WebP/BMP/TIFF，最大 25MB</p>
-        </Upload.Dragger>
-      </Form.Item>}
-      {businessType==='报关单'&&!!fileList.length&&<Card size="small" className="section-title" title="种子数据隐私检查与脱敏保护"><Progress percent={privacyProgress} status={privacyProgress<100?'active':'success'}/><Text type="secondary">{privacyProgress<100?'正在检测隐私字段并生成脱敏保护副本，完成前不能进入下一步。':'隐私检查与脱敏保护完成，后续流程使用受保护副本。'}</Text></Card>}
-      <Row gutter={16}>
-        <Col span={12}><Form.Item name="imgsz" label="版面推理尺寸" tooltip={`种子图片尺寸：${imageDimensions||'待读取'}`} rules={[{required:true}]}><InputNumber placeholder="请输入版面推理尺寸（320～4096）" min={320} max={4096} step={64} addonAfter="px" style={{width:'100%'}}/></Form.Item></Col>
-        <Col span={12}><Form.Item name="conf" label={businessType === '运单' ? '区块置信度阈值' : '置信度阈值'} tooltip="不是准确率；越高返回框越少" rules={[{ required: true }]}><InputNumber placeholder="请输入数值（0.01～1）" min={0.01} max={1} step={0.05} precision={2} style={{ width: '100%' }}/></Form.Item></Col>
-      </Row>
-      <FormModelConfig form={form} modelName="semanticModel" parameterSwitchName="semanticParamsEnabled" parameterName="semanticParamsJson" label="语义提取模型" options={[{value:'qwen3-vl-8b-instruct',label:'Qwen3-VL-8B-Instruct'}]} help="当前仅开放 Qwen3-VL-8B-Instruct，结合整单字段关系提取语义；关闭自定义参数后不传递模型生成参数。"/>
-      <Card size="small" title="语义提取提示词" className="template-editor-card">
-        <Form.Item name="semanticPrompt"><Input.TextArea placeholder="请输入内容" autoSize={{ minRows: 18, maxRows: 30 }}/></Form.Item>
-        <Text type="secondary">当前原型用一段完整 Prompt 表达最终语义建模目标；正式实现可按结构分类、字段绑定、生成规则、质检规则和审校复核拆成多阶段调用。</Text>
-      </Card>
-      </Card>
+      <DocumentFirstStep {...{form,businessType,methodLock,generatingBase,generateBaseImage,baseImageProgress,baseImagePreview,fileList,privacyProgress,imageDimensions}}/>
     </Form>
   </div>;
 }
@@ -336,11 +369,21 @@ export function TemplateCenter({ onCreatingChange, creating = false }) {
   const [query, setQuery] = useState('');
   const [conversationEditor, setConversationEditor] = useState(null);
   const [coldChainEditor, setColdChainEditor] = useState(null);
+  const [timeOrder, setTimeOrder] = useState(null);
   useEffect(() => {
-    const subpage = createType ? '新建模板' : conversationEditor ? (conversationEditor.readOnly ? '模板详情' : '编辑模板') : coldChainEditor ? (coldChainEditor.readOnly ? '模板详情' : '编辑模板') : false;
+    const documentSubpage = mockDetail ? (mockDetail.editing ? '编辑模板' : '模板详情') : detail ? (detail._editing ? '编辑模板' : '模板详情') : false;
+    const subpage = createType
+      ? '新建模板'
+      : documentSubpage
+        ? documentSubpage
+        : conversationEditor
+          ? (conversationEditor.readOnly ? '模板详情' : '编辑模板')
+          : coldChainEditor
+            ? (coldChainEditor.readOnly ? '模板详情' : '编辑模板')
+            : false;
     onCreatingChange?.(subpage);
-  }, [createType, conversationEditor, coldChainEditor, onCreatingChange]);
-  useEffect(() => { if (!creating) { setCreateType(null); setConversationEditor(null); setColdChainEditor(null); } }, [creating]);
+  }, [createType, conversationEditor, coldChainEditor, detail, mockDetail, onCreatingChange]);
+  useEffect(() => { if (!creating) { setCreateType(null); setConversationEditor(null); setColdChainEditor(null); setDetail(null); setMockDetail(null); } }, [creating]);
   const refresh = async () => {
     setError('');
     setLoading(true);
@@ -409,7 +452,7 @@ export function TemplateCenter({ onCreatingChange, creating = false }) {
     const conversationDraftRows=conversationDrafts.map(item=>({key:`conversation-draft/${item.draft_id}`,id:item.draft_id,name:item.name||item.configuration?.identity?.name||'未命名对话模板',dataType:'对话',businessType:item.business_type||item.configuration?.identity?.business_type||item.scenario_type||'智能客服',status:'草稿',publishable:['PASS','REVIEW'].includes(item.trial_status)&&templatePrivacyCheck(item.trial_run?.rule_report).passed,processing:false,summary:`${item.rule_card_count||0} 规则卡 · ${item.tool_count||0} 工具`,updatedAt:formatDateTime(item.updated_at),kind:'conversation-draft',raw:item}));
     const conversationPublishedRows=conversationTemplates.map(item=>({key:`conversation-published/${item.template_id}/${item.version}`,id:item.template_id,name:item.name,dataType:'对话',businessType:item.business_type||item.scenario_type||'智能客服',status:'已发布',taskReferences:taskReferences(item.template_id),summary:`${item.rule_card_count||0} 规则卡 · ${item.tool_count||0} 工具`,updatedAt:formatDateTime(item.updated_at),kind:'conversation-published',raw:item}));
     const coldDraftRows=coldChainDrafts.map(item=>({key:`time-draft/${item.draft_id}`,id:item.draft_id,name:item.name,dataType:'时序',businessType:item.business_type||'传感器时序',status:'草稿',publishable:item.trial_status==='PASS'&&templatePrivacyCheck(item.trial_run?.rule_report).passed,processing:false,summary:`${item.field_count||0} 字段 · ${item.coverage_profile_count||0} 标签组合`,updatedAt:formatDateTime(item.updated_at),kind:'time-draft',raw:item}));
-    const coldPublishedRows=coldChainTemplates.map(item=>({key:`time-published/${item.template_id}/${item.version}`,id:item.template_id,name:item.name,dataType:'时序',businessType:item.business_type||'冷藏集装箱物流',status:'已发布',taskReferences:taskReferences(item.template_id),summary:`${item.parameter_count||0} 字段 · ${(item.generation_rule_count||0)+(item.quality_rule_count||0)} 规则`,updatedAt:formatDateTime(item.updated_at),kind:'time-published',raw:item}));
+    const coldPublishedRows=coldChainTemplates.map(item=>({key:`time-published/${item.template_id}/${item.version}`,id:item.template_id,name:item.name,dataType:'时序',businessType:item.business_type||'温湿度时序数据',status:'已发布',taskReferences:taskReferences(item.template_id),summary:`${item.parameter_count||0} 字段 · ${(item.generation_rule_count||0)+(item.quality_rule_count||0)} 规则`,updatedAt:formatDateTime(item.updated_at),kind:'time-published',raw:item}));
     return demoTemplatePairs([...documentMockDraftRows,...documentDraftRows,...documentPublishedRows,...conversationDraftRows,...conversationPublishedRows,...coldDraftRows,...coldPublishedRows]);
   },[jobs,templates,conversationDrafts,conversationTemplates,coldChainDrafts,coldChainTemplates]);
   const businessTypeOptions=useMemo(()=>[...new Set(unifiedRows.map(row=>row.businessType).filter(Boolean))].sort(),[unifiedRows]);
@@ -501,14 +544,20 @@ export function TemplateCenter({ onCreatingChange, creating = false }) {
     message.success('模板已删除');
   }});
   const columns = [
-    {title:'模板名称 / ID',dataIndex:'name',width:270,render:(value,row)=><div><Text strong>{value}{row.status==='草稿'&&!String(value).endsWith('（草稿）')?'（草稿）':''}</Text><div><Text type="secondary">{row.id}</Text></div></div>},
+    {title:'模板名称 / ID',dataIndex:'name',width:270,render:(value,row)=><div><Button type="link" className="name-link" onClick={()=>showTemplateDetail(row)}>{value}{row.status==='草稿'&&!String(value).endsWith('（草稿）')?'（草稿）':''}</Button><div className="muted-id">{row.id}</div></div>},
     {title:'数据类型',dataIndex:'dataType',width:120},
     {title:'业务类型',dataIndex:'businessType',width:150},
     {title:'状态',dataIndex:'status',width:110,render:value=><Tag color={value==='已发布'?'green':'blue'}>{value}</Tag>},
     {title:'任务引用',width:110,render:(_,row)=>{const references=row.taskReferences||[];const count=references.length;return count?<Tooltip title={<div>{references.map(name=><div key={name}>{name}</div>)}</div>}><Text className="template-reference-count">{count}</Text></Tooltip>:<Text>0</Text>;}},
-    {title:'更新时间',dataIndex:'updatedAt',width:185},
-    {title:'操作',fixed:'right',width:240,render:(_,row)=>{const isDraft=row.status==='草稿';const references=row.taskReferences||[];return <TemplateActionButtons compact onDetail={()=>showTemplateDetail(row)} onEdit={()=>editUnified(row)} onPublish={()=>publishUnified(row)} onCopy={()=>copyUnified(row)} onDelete={()=>deleteUnified(row)} canEdit={isDraft} canPublish={isDraft&&row.publishable} canCopy canDelete={!references.length} editReason="已发布模板不可编辑，请复制为草稿后修改" publishReason={isDraft?'请先完成试运行并通过模板隐私检查':'该模板已经发布'} deleteReason={references.length?`已有 ${references.length} 个任务引用，不能删除`:'当前模板不可删除'}/>;}},
+    {title:'更新时间',dataIndex:'updatedAt',width:185,sorter:(a,b)=>String(a.updatedAt||'').localeCompare(String(b.updatedAt||'')),sortOrder:timeOrder},
+    {title:'操作',fixed:'right',width:240,render:(_,row)=>{const isDraft=row.status==='草稿';const references=row.taskReferences||[];return <Space size={0} className="template-row-actions"><Button type="link" size="small" onClick={()=>showTemplateDetail(row)}>详情</Button><Button type="link" size="small" disabled={!isDraft} title={isDraft?'编辑模板':'已发布模板不可编辑，请复制为草稿后修改'} onClick={()=>editUnified(row)}>编辑</Button><Button type="link" size="small" onClick={()=>copyUnified(row)}>复制</Button><Button type="link" size="small" danger disabled={references.length>0} title={references.length?`已有 ${references.length} 个任务引用，不能删除`:'删除模板'} onClick={()=>deleteUnified(row)}>删除</Button></Space>;}},
   ];
+  const sortedRows=useMemo(()=>{
+    if(!timeOrder)return filteredRows;
+    const copy=[...filteredRows];
+    copy.sort((a,b)=>String(a.updatedAt||'').localeCompare(String(b.updatedAt||'')));
+    return timeOrder==='descend'?copy.reverse():copy;
+  },[filteredRows,timeOrder]);
   const createMenuItems = taskTypes.map(item => ({
     key: item.value,
     icon: item.icon,
@@ -517,7 +566,7 @@ export function TemplateCenter({ onCreatingChange, creating = false }) {
   }));
   if(detail&&!detail._synthetic&&detail._editing)return <DocumentTemplateCreatePage existingJob={detail} onBack={()=>setDetail(null)} onCreated={updateJob} onUpdated={updateJob}/>;
   if(detail&&!detail._synthetic)return <TemplateEditor presentation="page" job={detail} open readOnly={!detail._editing} onClose={()=>setDetail(null)} onUpdated={updateJob}/>;
-  if(mockDetail?.raw?.source_type==='waybill_mock')return <WaybillSeedMockEditor fileName="橙途速运固定安全底图" templateName={mockDetail.name} onBack={()=>setMockDetail(null)} readOnly={!mockDetail.editing}/>;
+  if(mockDetail?.raw?.source_type==='waybill_mock')return <WaybillSeedMockEditor id={mockDetail.id} fileName="橙途速运固定安全底图" templateName={mockDetail.name} onBack={()=>setMockDetail(null)} readOnly={!mockDetail.editing}/>;
   if(mockDetail?.raw?.source_type==='contract_mock')return <ContractSeedMockEditor fileName="01_采购协议模板.docx" onBack={()=>setMockDetail(null)} readOnly={!mockDetail.editing}/>;
   if(coldChainEditor)return <ColdChainTemplateEditor draftId={typeof coldChainEditor==='string'?coldChainEditor:undefined} template={coldChainEditor?.template} readOnly={Boolean(coldChainEditor?.readOnly)} onClose={()=>{setColdChainEditor(null);refresh();}} onPublished={()=>{setColdChainEditor(null);refresh();}}/>;
   if(conversationEditor)return <ConversationTemplateEditor open presentation="page" template={conversationEditor.template} draftId={conversationEditor.draftId} readOnly={Boolean(conversationEditor.readOnly)} onClose={()=>{setConversationEditor(null);refresh();}} onSaved={()=>{setConversationEditor(null);refresh();}}/>;
@@ -543,7 +592,7 @@ export function TemplateCenter({ onCreatingChange, creating = false }) {
     {error && <Alert className="section-title" type="error" showIcon message="模板 Mock 数据读取失败" description={`${error}。请刷新页面以重新加载内置示例。`}/>} 
     <Card className="main-card" styles={{body:{padding:0}}}>
       <Flex justify="space-between" align="center" className="toolbar"><Space><Segmented value={filter} onChange={value=>{setFilter(value);setBusinessTypeFilter('全部');}} options={[{label:'全部',value:'全部'},{label:'文档图像',value:'文档类图像'},{label:'对话文本',value:'对话'},{label:'时序数据',value:'时序'}]}/><Select placeholder="请选择选项" value={statusFilter} onChange={setStatusFilter} style={{width:150}} options={['全部','草稿','已发布'].map(value=>({label:value==='全部'?'全部状态':value,value}))}/><Select placeholder="请选择选项" value={businessTypeFilter} onChange={setBusinessTypeFilter} style={{width:170}} options={[{label:'全部业务类型',value:'全部'},...businessTypeOptions.map(value=>({label:value,value}))]}/></Space><Input allowClear prefix={<SearchOutlined/>} placeholder="搜索模板名称、ID或业务类型" value={query} onChange={event=>setQuery(event.target.value)} style={{width:280}}/></Flex>
-      <Table loading={loading} rowKey="key" dataSource={loading?[]:filteredRows} columns={columns} scroll={{x:1360}} pagination={loading?false:{pageSize:8,showTotal:total=>`共 ${total} 条`}}/>
+      <Table loading={loading} rowKey="key" dataSource={loading?[]:sortedRows} columns={columns} scroll={{x:1360}} pagination={loading?false:{pageSize:8,showTotal:total=>`共 ${total} 条`}} onChange={(pagination,filters,sorter)=>setTimeOrder(Array.isArray(sorter)?sorter[0]?.order:sorter.order)}/>
     </Card>
     {detail?._synthetic ? <Drawer title="虚构文档模板草稿" size={760} open onClose={() => setDetail(null)}>
       <Alert type="info" showIcon message="这是独立的虚构合成模板制作记录" description="该流程不上传或复刻种子图片；模板只保存程序化版式、字段规则与安全图案。"/>
