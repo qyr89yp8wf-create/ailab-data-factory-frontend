@@ -1,3 +1,23 @@
+export function taskUsageSummary(task) {
+  const usage=task.apiUsage||task.backendJob?.api_usage||task.backendJob?.usage||{};
+  const summary=task.executionSummary||{};
+  const numeric=value=>typeof value==='number'&&Number.isFinite(value)&&value>=0?value:null;
+  const input=numeric(usage.input_tokens??usage.prompt_tokens);
+  const output=numeric(usage.output_tokens??usage.completion_tokens);
+  const total=numeric(usage.total_tokens??usage.tokens)??(input!==null&&output!==null?input+output:null);
+  const model=numeric(usage.model??summary.modelAttemptCount);
+  const image=numeric(usage.image??summary.imageAttemptCount);
+  return {
+    api_call_count:numeric(usage.api_call_count??usage.call_count??summary.apiAttemptCount)??(model!==null&&image!==null?model+image:null),
+    model_call_count:model,image_call_count:image,
+    retry_call_count:numeric(summary.retryAttemptCount),
+    input_tokens:input,output_tokens:output,total_tokens:total,
+    token_status:total===null?'未采集（不代表0）':'已记录',
+    source:task.execution?.fixture?'前端模拟统计':'任务调用记录',
+    counting_note:'API调用量包含重试；Token仅统计已记录的用量，不将图片数量换算成Token。',
+  };
+}
+
 export function buildTaskDetailLog(task, outputDataset, qualityReportId) {
   const job=task.backendJob||{};
   const summary=task.executionSummary||null;
@@ -14,6 +34,7 @@ export function buildTaskDetailLog(task, outputDataset, qualityReportId) {
     updated_at:task.updated||task.created,
     events,
     previous_runs:(task.runHistory||[]).map(run=>({run_number:run.runNumber||1,status:run.status,updated_at:run.updated,execution_summary:run.executionSummary,execution:run.execution})),
+    usage_summary:taskUsageSummary(task),
     api_usage:task.apiUsage||job.api_usage||job.usage||null,
     execution_summary:summary,
     result:{

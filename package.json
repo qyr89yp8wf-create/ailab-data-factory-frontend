@@ -1,6 +1,6 @@
 {
   "name": "data-factory-user-portal-v5-5",
-  "version": "5.5.0",
+  "version": "5.51.0",
   "private": true,
   "type": "module",
   "scripts": {

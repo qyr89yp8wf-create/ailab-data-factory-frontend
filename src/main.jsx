@@ -22,7 +22,7 @@ import {buildAugmentationSelection} from './augmentationSampling.js';
 import {taskQualityRules,PRIVACY_SCOPE_NOTICE} from './qualityScope';
 import { buildTaskDraft, upsertTaskDraft } from './taskDraft';
 import { conversationCatalogRules, conversationRuleCategory, LEGACY_CONVERSATION_RULE_MAP } from './conversationQualityCatalog';
-import { buildTaskDetailLog, downloadTaskLog } from './taskDetailLog';
+import { buildTaskDetailLog, downloadTaskLog, taskUsageSummary } from './taskDetailLog';
 import { resolveTaskConfiguration } from './taskConfiguration';
 import { qualityReports, preferredQualityReport, versionWithReport, appendQualityReport } from './qualityHistory';
 import { reportForQualityTask } from './taskQualityReport';
@@ -85,7 +85,7 @@ import { ApiKeysManager } from './ApiKeysManager';
 import { defaultConversationSampler, buildQuotaPlan } from './conversationSampling';
 import { readStore } from './mockStore';
 import { downloadDatasetExample } from './datasetExampleDownloads';
-import { RETRY_POLICY, newExecutionTask, advanceExecution, stopExecution, qualityExecutionMetadata } from './taskExecution';
+import { executionSteps, executionCounts, RETRY_POLICY, newExecutionTask, advanceExecution, stopExecution, qualityExecutionMetadata } from './taskExecution';
 import { BadcasePanel, ExecutionSummary, ExecutionLogs, VersionExecutionInfo, ExecutionQualityReport } from './TaskExecutionPanels';
 import './styles.css';
 import './ued.css';
@@ -1606,6 +1606,16 @@ function ProductTaskDetail({ task, initialTab='info', datasets:providedDatasets 
   const [activeTab,setActiveTab]=useState(initialTab==='config'?'info':['usage','result'].includes(initialTab)?'logs':initialTab);
   const config=resolveTaskConfiguration(task,datasets);
   const configJson=JSON.stringify(config,null,2);
+  const modelCalls=Array.from((task.execution?.steps||executionSteps({...config,taskType:task.taskType,modality:task.modality})).reduce((items,step)=>{
+    if(!step.model)return items;
+    const api=step.apiConfigName&&step.apiConfigName!=='任务模型配置'?step.apiConfigName:'未记录具体 API 名称';
+    const key=`${step.model}::${api}`;
+    const current=items.get(key);
+    if(current){if(!current.stages.includes(step.name))current.stages.push(step.name);}
+    else items.set(key,{model:step.model,api,stages:[step.name]});
+    return items;
+  },new Map()).values());
+
   const template=config.templateProfile||templateForDataset({modality:task.modality,businessType:task.businessType,templateId:config.templateId});
   const sourceVersionId=task.sourceVersionId||config.inputVersionId;
   const sourceDataset=task.taskType==='数据合成'?null:datasets.find(item=>item.id===(task.sourceDatasetId||config.inputDatasetId))
@@ -1635,7 +1645,10 @@ function ProductTaskDetail({ task, initialTab='info', datasets:providedDatasets 
       {key:'id',label:'任务 ID',children:<Text copyable>{task.id}</Text>},
       {key:'type',label:'任务类型',children:task.taskType},
       {key:'status',label:'状态',children:<StatusTag value={task.status}/>},
+      {key:'models',label:'调用模型名称 / API 名称',span:2,children:modelCalls.length?<Table size="small" pagination={false} rowKey={row=>`${row.model}::${row.api}`} dataSource={modelCalls} columns={[{title:'调用模型名称',dataIndex:'model'},{title:'API 名称',dataIndex:'api'},{title:'使用阶段',render:(_,row)=>row.stages.join('、')}]}/>:<Text type="secondary">未记录模型调用配置</Text>},
+
       {key:'business',label:'业务类型',children:task.businessType||template?.businessType||'-'},
+      {key:'executionCount',label:'执行数据量',span:2,children:executionCounts(task)?<Tooltip title="执行成功数 / 总数据量；差额包含执行失败和尚未执行的样本，对应 Badcase 总数">{`${executionCounts(task).success}/${executionCounts(task).total}`}</Tooltip>:'未记录'},
       {key:'updated',label:'更新时间',span:2,children:formatDateTime(task.updated||task.created)},
       {key:'description',label:'任务描述',span:2,children:task.description||'-'},
       {key:'template',label:'关联模板',span:2,children:template?<Space direction="vertical" size={2}><Typography.Link href={`?templateReference=${encodeURIComponent(template.id)}&referenceTask=${encodeURIComponent(task.id)}`} target="_blank" rel="noopener noreferrer">{template.name||template.id}</Typography.Link><Text type="secondary" copyable={Boolean(template.id)}>{template.id||'-'}</Text></Space>:'-'},
@@ -1643,8 +1656,8 @@ function ProductTaskDetail({ task, initialTab='info', datasets:providedDatasets 
       {key:'outputDataset',label:task.taskType==='数据质检'?'报告所属数据集':'生成数据集',span:2,children:datasetInfo(outputDataset,task.taskType==='数据质检'?outputVersion?.version:task.outputVersionId)},
     ]}/><details open className="config-snapshot"><summary>配置快照</summary>{!Object.keys(config).length?<Empty description="暂无记录"/>:<div className="task-rule-expanded"><Flex justify="flex-end" style={{marginBottom:12}}><Text copyable={{text:configJson}}>复制配置快照</Text></Flex><pre>{configJson}</pre></div>}</details></>},
     ...(autoQualityEnabled({...task,...task.configSnapshot})?[{key:'quality-report',label:'质检报告',children:detailReport?<RuleQualityReport report={detailReport}/>:<Empty description={task.taskType==='数据质检'?(task.status==='运行中'||task.status==='排队中'?'任务尚未生成质检结果':'该历史任务未保存逐规则质检结果'):'该任务未保存质检结果'}/>}]:[]),
-    {key:'logs',label:'运行日志',children:<div className="task-rule-expanded"><Flex justify="flex-end" style={{marginBottom:12}}><Button onClick={()=>{try{downloadTaskLog(task.id,logJson);message.success('已开始下载日志');}catch(error){message.error('日志下载失败，请重试');}}}>下载日志</Button></Flex><pre>{logJson}</pre></div>},
-    ...(task.taskType==='数据质检'?[]:[{key:'badcases',label:`Badcase${task.badcaseTrackingVersion?`（${task.executionSummary?.badcaseSampleCount||0}）`:''}`,children:<BadcasePanel key={task.id} task={task}/>}]),
+    {key:'logs',label:'运行日志',children:<div className="task-rule-expanded"><Descriptions bordered size="small" column={2} items={[{key:'calls',label:'API调用量（含重试）',children:taskUsageSummary(task).api_call_count??'未记录'},{key:'tokens',label:'Token消耗数',children:taskUsageSummary(task).total_tokens??'未采集'}]}/><Flex justify="flex-end" style={{marginBottom:12}}><Button onClick={()=>{try{downloadTaskLog(task.id,logJson);message.success('已开始下载日志');}catch(error){message.error('日志下载失败，请重试');}}}>下载日志</Button></Flex><pre>{logJson}</pre></div>},
+    {key:'badcases',label:`Badcase${executionCounts(task)?`（${executionCounts(task).remaining}）`:''}`,children:<BadcasePanel key={task.id} task={task}/>},
   ]}/>;
 }
 
@@ -1759,12 +1772,12 @@ function TaskCenter({ datasets, setDatasets, tasks, setTasks, storeReady, modali
     const id=prototypeTaskId(`${Date.now()}-${Math.random()}`);
     return newExecutionTask({...config,name:task.name,description:task.description,taskType:task.taskType,modality:task.modality,businessType:task.businessType},id,createVersionId(id));
   };
-  const rerunTask=task=>{
-    const config=resolveTaskConfiguration(task,datasets);
-    if(!config.templateProfile&&!config.templateId){message.error('历史任务缺少可重跑的模板配置，请复制为草稿补充后提交');return;}
+  const resumeTask=task=>{
+    if(!['失败','已终止'].includes(task.status))return;
+    if(!task.execution){message.warning('历史任务没有可恢复的执行进度，请复制为新任务');return;}
     const {runHistory=[],...previous}=task;
-    const run={...newExecutionTask({...config,name:task.name,description:task.description,taskType:task.taskType,modality:task.modality,businessType:task.businessType},task.id,createVersionId(`${task.id}-${Date.now()}`)),created:task.created,runNumber:(task.runNumber||1)+1,runHistory:[...runHistory,previous]};
-    setTasks(items=>items.map(item=>item.id===task.id?run:item));message.success('任务已重新开始运行');
+    const run={...task,status:'运行中',currentStage:'继续处理未完成样本',datasetWritten:false,updated:nowDateTime(),resumeCount:(task.resumeCount||0)+1,runHistory:[...runHistory,previous],execution:{...task.execution,tick:Math.min(task.execution.tick,11)}};
+    setTasks(items=>items.map(item=>item.id===task.id?run:item));message.success('任务已续跑，保留已有执行进度');
   };
   const terminateTask=task=>Modal.confirm({
     title:`终止任务“${task.name}”？`,
@@ -1795,13 +1808,13 @@ function TaskCenter({ datasets, setDatasets, tasks, setTasks, storeReady, modali
   });
   const renderTaskActions=task=>{
     const canEdit=task.status==='草稿';
-    const canRerun=['已完成','失败','已终止'].includes(task.status);
+    const canResume=['失败','已终止'].includes(task.status);
     const canTerminate=task.status==='运行中';
     const canDelete=['草稿','已完成','失败','已终止'].includes(task.status);
     return <Space size={0} className="task-row-actions">
       <Button type="link" size="small" onClick={()=>openDetail(task)}>详情</Button>
       <Button type="link" size="small" disabled={!canEdit} title={canEdit?'编辑任务配置':'仅草稿任务可编辑'} onClick={()=>editTask(task)}>编辑</Button>
-      <Button type="link" size="small" disabled={!canRerun} title={canRerun?'重新运行任务':'当前状态不可重跑'} onClick={()=>rerunTask(task)}>重跑</Button>
+      <Button type="link" size="small" disabled={!canResume} title={canResume?'继续执行任务':task.status==='已完成'?'已完成任务无需续跑':'当前状态不可续跑'} onClick={()=>resumeTask(task)}>续跑</Button>
       <Button type="link" size="small" onClick={()=>copyTask(task)}>复制</Button>
       <Button type="link" size="small" danger disabled={!canDelete} title={canDelete?'删除任务':'当前状态不可删除'} onClick={()=>deleteTask(task)}>删除</Button>
       {canTerminate&&<Button type="link" size="small" danger onClick={()=>terminateTask(task)}>终止</Button>}

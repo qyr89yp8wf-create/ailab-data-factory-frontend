@@ -4,7 +4,7 @@ import {autoQualityEnabled} from './taskPolicies.js';
 // Deterministic, compact browser simulation. Never calls an external provider.
 import {freezeRules,isDistribution,mockRuleResults,ruleSummary,templateLabelSnapshot,mockLabelDistributions} from './qualityResults.js';
 export const RETRY_POLICY = { maxAttemptsPerStep: 3, retryDelaysMs: [1000, 3000] };
-export const ERROR_LABELS = { TIMEOUT:'请求超时', RATE_LIMIT:'限流', SERVICE_ERROR:'服务异常', INVALID_RESPONSE:'返回格式异常', CONFIG_ERROR:'配置异常' };
+export const ERROR_LABELS = { NOT_RUN:'尚未执行', TIMEOUT:'请求超时', RATE_LIMIT:'限流', SERVICE_ERROR:'服务异常', INVALID_RESPONSE:'返回格式异常', CONFIG_ERROR:'配置异常' };
 const count = value => Math.max(0, Math.floor(Number(value)||0));
 const stamp = value => new Date(value).toLocaleString('sv-SE').replace('T',' ');
 export function executionSteps(v) {
@@ -197,7 +197,7 @@ export function badcaseAt(task,index){
   const time=task.execution.startedAt+Math.max(0,duration-300)*(index/Math.max(1,task.execution.processed));
   return {id:`BADCASE-${task.id}-${seq}`,sampleId,sourceSampleId,taskId:task.id,taskName:task.name,sourceDatasetId:task.sourceDatasetId,sourceVersionId:task.sourceVersionId,outputVersionId:task.outputVersionId||null,stage:step.name,stepId:step.id,ruleId:step.ruleId||null,ruleName:step.ruleName||null,model:step.model,apiConfigName:step.apiConfigName,errorType:row.errorType,errorMessage:ERROR_LABELS[row.errorType],attemptCount:last.attempts,maxAttempts:3,disposition:row.included?'保留样本，标记质检异常':'跳过，不写入输出版本',updatedAt:stamp(time+last.attempts*100),samplingTarget:task.businessType||'-',attempts:Array.from({length:last.attempts},(_,i)=>({attemptNo:i+1,startedAt:stamp(time+i*100),finishedAt:stamp(time+(i+1)*100),status:'ERROR',errorType:row.errorType,errorCode:row.errorType==='RATE_LIMIT'?'429':row.errorType==='CONFIG_ERROR'?'401':'API_ERROR',sanitizedMessage:ERROR_LABELS[row.errorType],providerRequestId:`MOCK-${task.id}-${seq}-${i+1}`})),ruleResults:task.configSnapshot.qualityProtocolVersion===2?mockRuleResults(task.configSnapshot.qualityRules,index,{failedRuleId:step.ruleId,missingInput:!step.quality,modality:task.modality,enhanced:task.taskType==='数据增强'||task.configSnapshot.sourceEnhanced===true,privacyPolicy:task.configSnapshot.privacyPolicy||[]}):(task.configSnapshot.qualityRules||[]).map(r=>{const pos=task.execution.steps.findIndex(s=>s.ruleId===(r.id||r.rule_id));return {id:r.id||r.rule_id,name:r.name,status:pos===row.failedStep?'ERROR':pos>row.failedStep||!step.quality?'NOT_RUN':'PASS'};})};
 }
-export function queryBadcases(task,{page=1,pageSize=10,stage='',errorType='',query=''}={}){
+function queryExecutedBadcases(task,{page=1,pageSize=10,stage='',errorType='',query=''}={}){
   if(!task?.execution)return {total:0,rows:[]};
   const n=task.execution.processed;
   const slots=Array.from({length:Math.min(n,60)},(_,i)=>i).filter(i=>sampleOutcome(task,i).failed).filter(i=>{const row=badcaseAt(task,i);return (!stage||row.stage===stage)&&(!errorType||row.errorType===errorType);});
@@ -214,4 +214,27 @@ export function queryBadcases(task,{page=1,pageSize=10,stage='',errorType='',que
     for(let block=0;block<n;block+=60)for(const slot of slots){const index=block+slot;if(index>=n)continue;const row=badcaseAt(task,index);if(`${row.id} ${row.sampleId} ${row.sourceSampleId||''}`.toLowerCase().includes(needle)){if(total>=(page-1)*pageSize&&rows.length<pageSize)rows.push(row);total++;}}
   }
   return {total,rows};
+}
+
+export function executionCounts(task){
+ const summary=task.executionSummary;
+ if(!summary)return null;
+ const total=count(summary.plannedSampleCount),success=Math.min(total,count(summary.succeededSampleCount));
+ return {total,success,remaining:total-success};
+}
+export function queryBadcases(task,options={}){
+ const {page=1,pageSize=10,stage='',errorType='',query=''}=options;
+ if(!task?.execution)return {total:0,rows:[]};
+ const errors=queryExecutedBadcases(task,{...options,page:1,pageSize:0});
+ const first=count(task.execution.processed),end=plannedCount(task.configSnapshot);
+ const includePending=(!stage||stage==='尚未执行')&&(!errorType||errorType==='NOT_RUN');
+ const pendingAt=index=>({id:`NOTRUN-${task.id}-${index+1}`,sampleId:task.taskType==='数据质检'?qualitySourceSampleId(task,index):`SAMPLE-${task.id}-${String(index+1).padStart(7,'0')}`,taskId:task.id,taskName:task.name,stage:'尚未执行',model:'-',apiConfigName:'-',errorType:'NOT_RUN',errorMessage:'尚未执行，无调用记录',attemptCount:0,maxAttempts:RETRY_POLICY.maxAttemptsPerStep,disposition:'等待续跑或后续调度',updatedAt:task.updated,attempts:[],ruleResults:[]});
+ const needle=query.trim().toLowerCase();
+ const matches=includePending&&needle?Array.from({length:Math.max(0,end-first)},(_,i)=>i+first).filter(i=>{const row=pendingAt(i);return `${row.id} ${row.sampleId}`.toLowerCase().includes(needle);}):null;
+ const pendingCount=includePending?(matches?matches.length:Math.max(0,end-first)):0;
+ const offset=(page-1)*pageSize,rows=[];
+ if(offset<errors.total)rows.push(...queryExecutedBadcases(task,{...options,page,pageSize}).rows);
+ const start=Math.max(0,offset-errors.total);
+ for(let i=start;i<pendingCount&&rows.length<pageSize;i++)rows.push(pendingAt(matches?matches[i]:first+i));
+ return {total:errors.total+pendingCount,rows};
 }
